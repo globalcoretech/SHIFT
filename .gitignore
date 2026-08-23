@@ -1,0 +1,40 @@
+# Secret and sensitive credential files (explicit name matching)
+sbox_live_key.csv
+appSettings.local.config
+appsettings.Local.json
+appsettings.Development.local.json
+*.env
+*.env.local
+*.secret
+*.pem
+*.key
+
+# Build and binary output directories
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+.vs/
+.vscode/
+.serena/
+.specify/
+-Force/
+
+# User and IDE-specific local files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.cache
+*.tmp
+
+# Database backup files and local DB instances
+*.bak
+*.mdf
+*.ldf
+*.db
+database/backups/
+
+# Application log files
+logs/
+*.log

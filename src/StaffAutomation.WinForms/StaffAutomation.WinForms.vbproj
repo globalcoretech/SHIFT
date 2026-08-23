@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>StaffAutomation.WinForms</RootNamespace>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <OptionStrict>On</OptionStrict>
+    <OptionExplicit>On</OptionExplicit>
+    <OptionInfer>On</OptionInfer>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsAsErrors>41999,42016,42017,42018,42019,42020,42021,42022,42032,42036</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Krypton.Toolkit" Version="90.24.11.317" />
+    <PackageReference Include="FontAwesome.Sharp" Version="6.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StaffAutomation.Core\StaffAutomation.Core.vbproj" />
+    <ProjectReference Include="..\StaffAutomation.DAL\StaffAutomation.DAL.vbproj" />
+    <ProjectReference Include="..\StaffAutomation.BLL\StaffAutomation.BLL.vbproj" />
+    <ProjectReference Include="..\StaffAutomation.Reports\StaffAutomation.Reports.vbproj" />
+  </ItemGroup>
+
+</Project>

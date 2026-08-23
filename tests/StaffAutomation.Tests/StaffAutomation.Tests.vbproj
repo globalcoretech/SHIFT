@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>StaffAutomation.Tests</RootNamespace>
+    <TargetFramework>net8.0</TargetFramework>
+    <OptionStrict>On</OptionStrict>
+    <OptionExplicit>On</OptionExplicit>
+    <OptionInfer>On</OptionInfer>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="MSTest.TestFramework" Version="3.2.2" />
+    <PackageReference Include="MSTest.TestAdapter" Version="3.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StaffAutomation.Core\StaffAutomation.Core.vbproj" />
+    <ProjectReference Include="..\..\src\StaffAutomation.DAL\StaffAutomation.DAL.vbproj" />
+    <ProjectReference Include="..\..\src\StaffAutomation.BLL\StaffAutomation.BLL.vbproj" />
+    <ProjectReference Include="..\..\src\StaffAutomation.Reports\StaffAutomation.Reports.vbproj" />
+  </ItemGroup>
+
+</Project>
