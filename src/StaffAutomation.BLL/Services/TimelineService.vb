@@ -92,6 +92,47 @@ Namespace Services
             Return success
         End Function
 
+        Public Async Function GetActiveActivityForUserAsync(userId As Integer) As Task(Of TaskActivityDto) Implements ITimelineService.GetActiveActivityForUserAsync
+            Dim entity = Await _activityRepo.GetActiveActivityForUserAsync(userId)
+            If entity Is Nothing Then Return Nothing
+            Return New TaskActivityDto() With {
+                .ActivityId = entity.ActivityId,
+                .TaskId = entity.TaskId,
+                .UserId = entity.UserId,
+                .Category = entity.Category,
+                .ActivityDescription = entity.ActivityDescription,
+                .StartTime = entity.StartTime,
+                .EndTime = entity.EndTime,
+                .DurationMinutes = entity.DurationMinutes,
+                .ActivityDate = entity.ActivityDate
+            }
+        End Function
+
+        Public Async Function AutoPauseActiveTimerOnAttendanceEventAsync(userId As Integer, pauseReason As String) As Task(Of Boolean) Implements ITimelineService.AutoPauseActiveTimerOnAttendanceEventAsync
+            Dim active = Await _activityRepo.GetActiveActivityForUserAsync(userId)
+            If active Is Nothing OrElse active.EndTime.HasValue Then
+                Return False
+            End If
+
+            Dim endTime = DateTime.UtcNow
+            Dim durationMinutes = CInt((endTime - active.StartTime).TotalMinutes)
+            If durationMinutes < 1 Then durationMinutes = 1
+
+            Dim updatedDesc = active.ActivityDescription
+            Dim pauseTag = $"[{pauseReason.Trim()}]"
+            If Not String.IsNullOrWhiteSpace(pauseReason) AndAlso Not updatedDesc.Contains(pauseTag) Then
+                updatedDesc &= $" {pauseTag}"
+            End If
+
+            Dim success = Await _activityRepo.CompleteActiveTimerAsync(active.ActivityId, endTime, durationMinutes, updatedDesc)
+            If success Then
+                _appLogger.LogInfo($"Auto-paused active timer on Task ID {active.TaskId} for User ID {userId} ({pauseReason}).", "TimelineService")
+                Await _auditLogger.LogAuditAsync(userId, "TIMER_AUTO_PAUSE", "TimelineService", $"Auto-paused active timer on Task ID {active.TaskId} ({durationMinutes} mins). Reason: {pauseReason}")
+            End If
+
+            Return success
+        End Function
+
         Public Async Function GetDailyTimelineForUserAsync(userId As Integer, activityDate As DateTime) As Task(Of List(Of TaskActivityDto)) Implements ITimelineService.GetDailyTimelineForUserAsync
             Dim list = Await _activityRepo.GetDailyTimelineByUserAsync(userId, activityDate)
             Dim dtoList As New List(Of TaskActivityDto)()
@@ -109,6 +150,18 @@ Namespace Services
                 })
             Next
             Return dtoList
+        End Function
+
+        Public Async Function GetChronologicalDailyTimelineAsync(startDate As DateTime, endDate As DateTime, Optional userId As Nullable(Of Integer) = Nothing) As Task(Of List(Of DailyTimelineItemDto)) Implements ITimelineService.GetChronologicalDailyTimelineAsync
+            Return Await _activityRepo.GetChronologicalDailyTimelineAsync(startDate, endDate, userId)
+        End Function
+
+        Public Async Function GetClientWorkSummaryReportAsync(startDate As DateTime, endDate As DateTime, Optional clientId As Nullable(Of Integer) = Nothing) As Task(Of List(Of ClientWorkSummaryDto)) Implements ITimelineService.GetClientWorkSummaryReportAsync
+            Return Await _activityRepo.GetClientWorkSummaryReportAsync(startDate, endDate, clientId)
+        End Function
+
+        Public Async Function GetStaffProductivitySummaryReportAsync(startDate As DateTime, endDate As DateTime, Optional userId As Nullable(Of Integer) = Nothing) As Task(Of List(Of StaffProductivitySummaryDto)) Implements ITimelineService.GetStaffProductivitySummaryReportAsync
+            Return Await _activityRepo.GetStaffProductivitySummaryReportAsync(startDate, endDate, userId)
         End Function
     End Class
 End Namespace

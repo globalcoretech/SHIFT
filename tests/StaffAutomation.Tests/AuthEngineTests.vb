@@ -7,7 +7,9 @@ Imports System.Data
 Imports System.Linq
 Imports System.Threading.Tasks
 Imports Microsoft.VisualStudio.TestTools.UnitTesting
+Imports Moq
 Imports StaffAutomation.BLL.Logging
+Imports StaffAutomation.Core.DTOs
 Imports StaffAutomation.BLL.Services
 Imports StaffAutomation.Core.Constants
 Imports StaffAutomation.Core.Entities
@@ -198,12 +200,181 @@ Namespace StaffAutomation.Tests
             End Try
         End Function
 
-        Private Function CreateAuthService(repo As IUserRepository) As IAuthService
+        <TestMethod>
+        Public Async Function TestValidAdmin_LoginAllowed_DeviceServiceNotCalled() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 1, .Username = "admin_user", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Admin, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            
+            Dim result = Await authService.AuthenticateUserAsync("admin_user", "Pass123!")
+            Assert.IsNotNull(result)
+            mockDeviceService.Verify(Function(s) s.ValidateDeviceAsync(It.IsAny(Of Integer)(), It.IsAny(Of DeviceClientInfoDto)()), Times.Never())
+        End Function
+
+        <TestMethod>
+        Public Async Function TestValidOwner_LoginAllowed_DeviceServiceNotCalled() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 2, .Username = "owner_user", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Owner, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            
+            Dim result = Await authService.AuthenticateUserAsync("owner_user", "Pass123!")
+            Assert.IsNotNull(result)
+            mockDeviceService.Verify(Function(s) s.ValidateDeviceAsync(It.IsAny(Of Integer)(), It.IsAny(Of DeviceClientInfoDto)()), Times.Never())
+        End Function
+
+        <TestMethod>
+        Public Async Function TestValidEmployee_ApprovedDevice_LoginAllowed() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            mockDeviceService.Setup(Function(s) s.ValidateDeviceAsync(10, It.IsAny(Of DeviceClientInfoDto)())).
+                ReturnsAsync(New DeviceValidationResultDto With {.IsAllowed = True, .Status = DeviceStatus.Approved})
+            
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            Dim result = Await authService.AuthenticateUserAsync("user1", "Pass123!")
+            Assert.IsNotNull(result)
+            Assert.AreEqual("user1", result.Username)
+            mockDeviceService.Verify(Function(s) s.ValidateDeviceAsync(It.IsAny(Of Integer)(), It.IsAny(Of DeviceClientInfoDto)()), Times.Once())
+        End Function
+
+        <TestMethod>
+        Public Async Function TestValidEmployee_PendingDevice_LoginBlocked() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            mockDeviceService.Setup(Function(s) s.ValidateDeviceAsync(10, It.IsAny(Of DeviceClientInfoDto)())).
+                ReturnsAsync(New DeviceValidationResultDto With {.IsAllowed = False, .Status = DeviceStatus.Pending})
+            
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            Await Assert.ThrowsExceptionAsync(Of DevicePendingApprovalException)(Function() authService.AuthenticateUserAsync("user1", "Pass123!"))
+        End Function
+
+        <TestMethod>
+        Public Async Function TestValidEmployee_RejectedDevice_LoginBlocked() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            mockDeviceService.Setup(Function(s) s.ValidateDeviceAsync(10, It.IsAny(Of DeviceClientInfoDto)())).
+                ReturnsAsync(New DeviceValidationResultDto With {.IsAllowed = False, .Status = DeviceStatus.Rejected})
+            
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            Await Assert.ThrowsExceptionAsync(Of DeviceAccessDeniedException)(Function() authService.AuthenticateUserAsync("user1", "Pass123!"))
+        End Function
+
+        <TestMethod>
+        Public Async Function TestValidEmployee_RevokedDevice_LoginBlocked() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            mockDeviceService.Setup(Function(s) s.ValidateDeviceAsync(10, It.IsAny(Of DeviceClientInfoDto)())).
+                ReturnsAsync(New DeviceValidationResultDto With {.IsAllowed = False, .Status = DeviceStatus.Revoked})
+            
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            Await Assert.ThrowsExceptionAsync(Of DeviceAccessDeniedException)(Function() authService.AuthenticateUserAsync("user1", "Pass123!"))
+        End Function
+
+        <TestMethod>
+        Public Async Function TestInvalidEmployeePassword_DeviceValidationNotExecuted() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            
+            Await Assert.ThrowsExceptionAsync(Of AuthenticationException)(Function() authService.AuthenticateUserAsync("user1", "WrongPass!"))
+            mockDeviceService.Verify(Function(s) s.ValidateDeviceAsync(It.IsAny(Of Integer)(), It.IsAny(Of DeviceClientInfoDto)()), Times.Never())
+        End Function
+        
+        <TestMethod>
+        Public Async Function TestInvalidAdminPassword_DeviceValidationNotExecuted() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 1, .Username = "admin_user", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Admin, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            
+            Await Assert.ThrowsExceptionAsync(Of AuthenticationException)(Function() authService.AuthenticateUserAsync("admin_user", "WrongPass!"))
+            mockDeviceService.Verify(Function(s) s.ValidateDeviceAsync(It.IsAny(Of Integer)(), It.IsAny(Of DeviceClientInfoDto)()), Times.Never())
+        End Function
+
+        <TestMethod>
+        Public Async Function TestInactiveAccount_DeviceValidationNotExecuted() As Task
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = False })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            
+            Await Assert.ThrowsExceptionAsync(Of AuthenticationException)(Function() authService.AuthenticateUserAsync("user1", "Pass123!"))
+        End Function
+
+        <TestMethod>
+        Public Async Function TestDeviceBelongsToAnotherUser_NoAutoOwnershipTransfer() As Task
+            ' If the device belongs to another staff member, DeviceService will return IsAllowed=False and a relevant Status (e.g., Pending for the new user, or Rejected).
+            ' AuthService should correctly block access.
+            Dim repo As New FakeUserRepository()
+            Dim hasher As New PasswordHasher()
+            Dim salt As String = String.Empty
+            Dim hash = hasher.HashPassword("Pass123!", salt)
+            repo.AddUser(New UserEntity() With { .UserId = 10, .Username = "user1", .PasswordHash = hash, .PasswordSalt = salt, .Role = UserRole.Employee, .IsActive = True })
+
+            Dim mockDeviceService = New Mock(Of IDeviceService)()
+            mockDeviceService.Setup(Function(s) s.ValidateDeviceAsync(10, It.IsAny(Of DeviceClientInfoDto)())).
+                ReturnsAsync(New DeviceValidationResultDto With {.IsAllowed = False, .Status = DeviceStatus.Pending}) ' Treating it as pending request for the new user
+            
+            Dim authService = CreateAuthService(repo, mockDeviceService.Object)
+            Await Assert.ThrowsExceptionAsync(Of DevicePendingApprovalException)(Function() authService.AuthenticateUserAsync("user1", "Pass123!"))
+        End Function
+
+        Private Function CreateAuthService(repo As IUserRepository, Optional deviceService As IDeviceService = Nothing) As IAuthService
             Dim hasher As New PasswordHasher()
             Dim appLogger As IAppLogger = New FakeAppLogger()
             Dim sqlHelper As ISqlHelper = New FakeSqlHelper()
             Dim auditLogger As New AuditLogger(sqlHelper)
-            Return New AuthService(repo, hasher, appLogger, auditLogger)
+
+            If deviceService Is Nothing Then
+                Dim mockDeviceService = New Mock(Of IDeviceService)()
+                mockDeviceService.Setup(Function(s) s.ValidateDeviceAsync(It.IsAny(Of Integer)(), It.IsAny(Of DeviceClientInfoDto)())).
+                    ReturnsAsync(New DeviceValidationResultDto With {.IsAllowed = True, .Status = DeviceStatus.Approved})
+                deviceService = mockDeviceService.Object
+            End If
+
+            Return New AuthService(repo, hasher, appLogger, auditLogger, deviceService)
         End Function
 
         Private Class FakeUserRepository
@@ -251,6 +422,10 @@ Namespace StaffAutomation.Tests
 
         Private Class FakeSqlHelper
             Implements ISqlHelper
+
+            Public Function GetConnection() As IDbConnection Implements ISqlHelper.GetConnection
+                Return Nothing
+            End Function
 
             Public Function ExecuteNonQueryAsync(commandText As String, parameters As IDbDataParameter(), Optional transaction As IDbTransaction = Nothing) As Task(Of Integer) Implements ISqlHelper.ExecuteNonQueryAsync
                 Return Task.FromResult(1)

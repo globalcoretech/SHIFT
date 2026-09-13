@@ -106,7 +106,7 @@ Namespace Forms.Admin
             Me.pnlForm.Controls.Add(Me.lblUsername)
             Me.pnlForm.Location = New Point(16, 76)
             Me.pnlForm.Name = "pnlForm"
-            Me.pnlForm.Size = New Size(620, 640)
+            Me.pnlForm.Size = New Size(590, 544)
             Me.pnlForm.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left
             Me.pnlForm.TabIndex = 1
             '
@@ -229,27 +229,27 @@ Namespace Forms.Admin
             Me.dgvUsers.AllowUserToDeleteRows = False
             Me.dgvUsers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
             Me.dgvUsers.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize
-            Me.dgvUsers.Location = New Point(650, 115)
+            Me.dgvUsers.Location = New Point(620, 115)
             Me.dgvUsers.MultiSelect = False
             Me.dgvUsers.Name = "dgvUsers"
             Me.dgvUsers.ReadOnly = True
             Me.dgvUsers.SelectionMode = DataGridViewSelectionMode.FullRowSelect
-            Me.dgvUsers.Size = New Size(550, 600)
+            Me.dgvUsers.Size = New Size(520, 505)
             Me.dgvUsers.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
             Me.dgvUsers.TabIndex = 2
             '
             ' txtSearch
             '
-            Me.txtSearch.Location = New Point(715, 80)
+            Me.txtSearch.Location = New Point(685, 80)
             Me.txtSearch.Name = "txtSearch"
-            Me.txtSearch.Size = New Size(485, 23)
+            Me.txtSearch.Size = New Size(455, 23)
             Me.txtSearch.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
             Me.txtSearch.TabIndex = 3
             '
             ' lblSearch
             '
             Me.lblSearch.AutoSize = True
-            Me.lblSearch.Location = New Point(650, 83)
+            Me.lblSearch.Location = New Point(620, 83)
             Me.lblSearch.Name = "lblSearch"
             Me.lblSearch.Size = New Size(55, 15)
             Me.lblSearch.TabIndex = 4
@@ -263,8 +263,8 @@ Namespace Forms.Admin
             '
             Me.AutoScaleDimensions = New SizeF(7.0!, 15.0!)
             Me.AutoScaleMode = AutoScaleMode.Font
-            Me.ClientSize = New Size(1220, 740)
-            Me.MinimumSize = New Size(1020, 660)
+            Me.ClientSize = New Size(1160, 640)
+            Me.MinimumSize = New Size(980, 580)
             Me.Controls.Add(Me.lblSearch)
             Me.Controls.Add(Me.txtSearch)
             Me.Controls.Add(Me.dgvUsers)

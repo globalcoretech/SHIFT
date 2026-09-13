@@ -18,6 +18,7 @@ Imports StaffAutomation.Core.DTOs
 Imports StaffAutomation.Core.Enums
 Imports StaffAutomation.Core.Interfaces
 Imports StaffAutomation.Core.Logging
+Imports StaffAutomation.Core.Security
 Imports StaffAutomation.DAL.Configuration
 Imports StaffAutomation.DAL.Core
 Imports StaffAutomation.DAL.Repositories
@@ -32,11 +33,18 @@ Namespace Forms.Main
     ''' </summary>
     Public Class ReportsControl
         Inherits UserControl
+        Implements IPreloadableScreen
 
         Private ReadOnly _clientService As IClientService
         Private ReadOnly _taskService As ITaskManagementService
         Private ReadOnly _attendanceService As BLL.Interfaces.IAttendanceService
+        Private ReadOnly _timelineService As ITimelineService
+        Private ReadOnly _userService As UserService
         Private ReadOnly _reportGenerator As ReportGeneratorService
+        Private ReadOnly _dailyActivityReportService As Core.Interfaces.IReportService
+        Private _activeNavigationToken As Long = 0
+
+        Private _staffActivityControl As StaffActivityReportControl
 
         ' Header & Layout Containers
         Private pnlHeroHeader As Panel
@@ -55,6 +63,8 @@ Namespace Forms.Main
         Private dtpEndDate As Krypton.Toolkit.KryptonDateTimePicker
         Private lblClientFilter As Label
         Private cboClientFilter As Krypton.Toolkit.KryptonComboBox
+        Private lblStaffFilter As Label
+        Private cboStaffFilter As Krypton.Toolkit.KryptonComboBox
 
         Private btnGenerate As Forms.Common.ModernButton
         Private btnExportExcel As Forms.Common.ModernButton
@@ -83,15 +93,27 @@ Namespace Forms.Main
             Dim taskRepo As DAL.Interfaces.ITaskRepository = New TaskRepository(sqlHelper)
             Dim userRepo As DAL.Interfaces.IUserRepository = New UserRepository(sqlHelper)
             Dim attendanceRepo As DAL.Interfaces.IAttendanceRepository = New AttendanceRepository(sqlHelper)
+            Dim taskActivityRepo As DAL.Interfaces.ITaskActivityRepository = New TaskActivityRepository(sqlHelper)
             Dim workflowEngine As ITaskWorkflowEngine = New TaskWorkflowEngine()
+            Dim reportRepo As DAL.Interfaces.IReportRepository = New ReportRepository(config)
 
+            _timelineService = New TimelineService(taskActivityRepo, taskRepo, workflowEngine, appLogger, auditLogger)
             _clientService = New ClientService(clientRepo, appLogger, auditLogger)
             _taskService = New TaskManagementService(taskRepo, workflowEngine, appLogger, auditLogger, clientRepo, userRepo)
-            _attendanceService = New AttendanceService(attendanceRepo, userRepo, appLogger, auditLogger)
+            _userService = New UserService(userRepo, New PasswordHasher(), appLogger, auditLogger)
+            _attendanceService = New AttendanceService(attendanceRepo, userRepo, appLogger, auditLogger, _timelineService)
             _reportGenerator = New ReportGeneratorService()
+            _dailyActivityReportService = New BLL.Services.ReportService(reportRepo)
+
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
 
             InitializeComponent()
-            PopulateDropdownsAsync()
+            ThemeConstants.EnableDoubleBuffering(pnlHeroHeader)
+            ThemeConstants.EnableDoubleBuffering(pnlFilterBar)
+            ThemeConstants.EnableDoubleBuffering(pnlGridCard)
+            ThemeConstants.EnableDoubleBuffering(dgvReportData)
         End Sub
 
         Private Sub InitializeComponent()
@@ -138,10 +160,13 @@ Namespace Forms.Main
                 .TabIndex = 0
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboReportType)
+            cboReportType.Items.Add("Daily Staff Work Timeline (Chronological)")
+            cboReportType.Items.Add("Client Time Consumption Report")
+            cboReportType.Items.Add("Staff Productivity & Attendance Comparison")
             cboReportType.Items.Add("Task Completion & Status Summary")
-            cboReportType.Items.Add("Client Work History & Compliance")
-            cboReportType.Items.Add("Staff Attendance & Hours Report")
+            cboReportType.Items.Add("Staff Daily Activity Report (Detailed)")
             cboReportType.SelectedIndex = 0
+            AddHandler cboReportType.SelectedIndexChanged, AddressOf btnGenerate_Click
 
             lblStartDate = New Label() With {
                 .Text = "From:",
@@ -153,7 +178,7 @@ Namespace Forms.Main
 
             dtpStartDate = New Krypton.Toolkit.KryptonDateTimePicker() With {
                 .Format = DateTimePickerFormat.Short,
-                .Value = DateTime.Today.AddDays(-30),
+                .Value = New DateTime(DateTime.Today.Year, DateTime.Today.Month, 1),
                 .Location = New Point(390, 10),
                 .Size = New Size(105, 24),
                 .TabIndex = 1
@@ -177,9 +202,9 @@ Namespace Forms.Main
             }
             ThemeConstants.ApplyAppDatePickerStyle(dtpEndDate)
 
-            ' Row 2: Client Filter
+            ' Row 2: Client & Staff Filters
             lblClientFilter = New Label() With {
-                .Text = "Client Filter:",
+                .Text = "Client:",
                 .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold),
                 .ForeColor = ThemeConstants.TextPrimary,
                 .Location = New Point(10, 54),
@@ -188,12 +213,30 @@ Namespace Forms.Main
 
             cboClientFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(95, 50),
-                .Size = New Size(240, 24),
+                .Location = New Point(60, 50),
+                .Size = New Size(210, 24),
                 .TabIndex = 3
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboClientFilter)
 
+            lblStaffFilter = New Label() With {
+                .Text = "Staff:",
+                .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold),
+                .ForeColor = ThemeConstants.TextPrimary,
+                .Location = New Point(280, 54),
+                .AutoSize = True
+            }
+
+            cboStaffFilter = New Krypton.Toolkit.KryptonComboBox() With {
+                .DropDownStyle = ComboBoxStyle.DropDownList,
+                .Location = New Point(325, 50),
+                .Size = New Size(190, 24),
+                .TabIndex = 4
+            }
+            ThemeConstants.ApplyAppComboBoxStyle(cboStaffFilter)
+
+            pnlFilterFields.Controls.Add(cboStaffFilter)
+            pnlFilterFields.Controls.Add(lblStaffFilter)
             pnlFilterFields.Controls.Add(cboClientFilter)
             pnlFilterFields.Controls.Add(lblClientFilter)
             pnlFilterFields.Controls.Add(dtpEndDate)
@@ -347,6 +390,11 @@ Namespace Forms.Main
             pnlEmptyState.Controls.Add(lblEmptyTitle)
             pnlEmptyState.Controls.Add(pbEmptyIcon)
 
+            _staffActivityControl = New StaffActivityReportControl() With {
+                .Visible = False
+            }
+
+            pnlGridCard.Controls.Add(_staffActivityControl)
             pnlGridCard.Controls.Add(pnlEmptyState)
             pnlGridCard.Controls.Add(dgvReportData)
             pnlGridCard.Controls.Add(pnlGridHeader)
@@ -369,9 +417,21 @@ Namespace Forms.Main
             End If
         End Sub
 
+        Public Async Function PreloadDataAsync(navigationToken As Long) As Task Implements IPreloadableScreen.PreloadDataAsync
+            _activeNavigationToken = navigationToken
+            Await PopulateDropdownsInternalAsync(navigationToken)
+            Await GenerateReportDataAsync()
+        End Function
+
         Private Async Sub PopulateDropdownsAsync()
+            Await PopulateDropdownsInternalAsync(0)
+        End Sub
+
+        Private Async Function PopulateDropdownsInternalAsync(token As Long) As Task
             Try
                 Dim clients = Await _clientService.GetAllClientsAsync()
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
+
                 Dim displayList As New List(Of ClientDto)()
                 displayList.Add(New ClientDto() With {.ClientId = 0, .ClientName = "-- All Registered Clients --"})
                 displayList.AddRange(clients)
@@ -380,9 +440,21 @@ Namespace Forms.Main
                 cboClientFilter.DisplayMember = "ClientName"
                 cboClientFilter.ValueMember = "ClientId"
                 cboClientFilter.SelectedIndex = 0
+
+                Dim users = Await _userService.GetAllUsersAsync()
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
+
+                Dim staffList As New List(Of UserDto)()
+                staffList.Add(New UserDto() With {.UserId = 0, .FullName = "-- All Staff Members --"})
+                If users IsNot Nothing Then staffList.AddRange(users)
+
+                cboStaffFilter.DataSource = staffList
+                cboStaffFilter.DisplayMember = "FullName"
+                cboStaffFilter.ValueMember = "UserId"
+                cboStaffFilter.SelectedIndex = 0
             Catch ex As Exception
             End Try
-        End Sub
+        End Function
 
         Private Async Sub btnGenerate_Click(sender As Object, e As EventArgs)
             Await GenerateReportDataAsync()
@@ -391,7 +463,7 @@ Namespace Forms.Main
         Private Async Function GenerateReportDataAsync() As Task(Of DataTable)
             Try
                 Me.Cursor = Cursors.WaitCursor
-                Dim selectedReport = If(cboReportType.SelectedItem IsNot Nothing, cboReportType.SelectedItem.ToString(), "Task Completion & Status Summary")
+                Dim selectedReportText = If(cboReportType.SelectedItem IsNot Nothing, cboReportType.SelectedItem.ToString(), "Daily Staff Work Timeline (Chronological)")
                 Dim selectedClientId As Integer = 0
                 If cboClientFilter.SelectedValue IsNot Nothing Then
                     If TypeOf cboClientFilter.SelectedValue Is Integer Then
@@ -400,12 +472,100 @@ Namespace Forms.Main
                         selectedClientId = DirectCast(cboClientFilter.SelectedItem, ClientDto).ClientId
                     End If
                 End If
+
+                Dim selectedUserId As Integer = 0
+                If cboStaffFilter.SelectedValue IsNot Nothing Then
+                    If TypeOf cboStaffFilter.SelectedValue Is Integer Then
+                        selectedUserId = CInt(cboStaffFilter.SelectedValue)
+                    ElseIf TypeOf cboStaffFilter.SelectedItem Is UserDto Then
+                        selectedUserId = DirectCast(cboStaffFilter.SelectedItem, UserDto).UserId
+                    End If
+                End If
+                Dim targetStaffId As Integer? = If(selectedUserId > 0, CType(selectedUserId, Integer?), Nothing)
+
                 Dim startDate = dtpStartDate.Value.Date
                 Dim endDate = dtpEndDate.Value.Date
 
                 Dim dt As New DataTable()
 
-                If selectedReport.Contains("Task") Then
+                If selectedReportText.Contains("Staff Daily Activity Report") Then
+                    dgvReportData.Visible = False
+                    pnlGridHeader.Visible = False
+                    _staffActivityControl.Visible = True
+
+                    Dim reportData = Await _dailyActivityReportService.GetStaffDailyActivityReportAsync(targetStaffId, startDate, endDate)
+                    _staffActivityControl.LoadData(reportData)
+                    
+                    lblRecordCount.Text = $"📋 Report Preview ({reportData.Count} Staff Loaded)"
+                    
+                    If reportData.Count > 0 Then
+                        pnlEmptyState.Visible = False
+                    Else
+                        pnlEmptyState.Visible = True
+                        PositionEmptyStateOverlay()
+                    End If
+                    Return New DataTable()
+                End If
+
+                _staffActivityControl.Visible = False
+                dgvReportData.Visible = True
+                pnlGridHeader.Visible = True
+
+                If selectedReportText.Contains("Daily Staff Work Timeline") Then
+                    dt.Columns.Add("Staff Name")
+                    dt.Columns.Add("Work Date")
+                    dt.Columns.Add("Start Time")
+                    dt.Columns.Add("End Time")
+                    dt.Columns.Add("Client Name")
+                    dt.Columns.Add("Task Code")
+                    dt.Columns.Add("Task Title")
+                    dt.Columns.Add("Category")
+                    dt.Columns.Add("Description")
+                    dt.Columns.Add("Duration (Mins)", GetType(Integer))
+                    dt.Columns.Add("Duration (Hours)", GetType(Double))
+                    dt.Columns.Add("Status")
+
+                    Dim timelineItems = Await _timelineService.GetChronologicalDailyTimelineAsync(startDate, endDate, targetStaffId)
+                    For Each item In timelineItems
+                        Dim endTimeStr = If(item.EndTime.HasValue, item.EndTime.Value.ToString("hh:mm tt"), "-- Running --")
+                        dt.Rows.Add(item.StaffName, item.WorkDate.ToString("dd-MMM-yyyy"), item.StartTime.ToString("hh:mm tt"), endTimeStr, item.ClientName, item.TaskCode, item.TaskTitle, item.TaskCategory, item.ActivityDescription, item.DurationMinutes, item.DurationHours, item.ActivityStatus)
+                    Next
+
+                ElseIf selectedReportText.Contains("Client Time Consumption") Then
+                    dt.Columns.Add("Client Code")
+                    dt.Columns.Add("Client Name")
+                    dt.Columns.Add("Total Tasks", GetType(Integer))
+                    dt.Columns.Add("Completed Tasks", GetType(Integer))
+                    dt.Columns.Add("Assigned Staff Count", GetType(Integer))
+                    dt.Columns.Add("Productive Mins", GetType(Integer))
+                    dt.Columns.Add("Productive Hours", GetType(Double))
+                    dt.Columns.Add("Avg Mins / Task", GetType(Double))
+
+                    Dim clientSummaries = Await _timelineService.GetClientWorkSummaryReportAsync(startDate, endDate, selectedClientId)
+                    For Each item In clientSummaries
+                        dt.Rows.Add(item.ClientCode, item.ClientName, item.TotalTasksCount, item.CompletedTasksCount, item.AssignedStaffCount, item.TotalProductiveMinutes, item.TotalProductiveHours, item.AvgMinutesPerCompletedTask)
+                    Next
+
+                ElseIf selectedReportText.Contains("Staff Productivity") Then
+                    dt.Columns.Add("Staff Name")
+                    dt.Columns.Add("Department")
+                    dt.Columns.Add("Working Days", GetType(Integer))
+                    dt.Columns.Add("Presence Mins", GetType(Integer))
+                    dt.Columns.Add("Presence Hours", GetType(Double))
+                    dt.Columns.Add("Break Mins", GetType(Integer))
+                    dt.Columns.Add("Break Hours", GetType(Double))
+                    dt.Columns.Add("Productive Task Mins", GetType(Integer))
+                    dt.Columns.Add("Productive Task Hours", GetType(Double))
+                    dt.Columns.Add("Completed Tasks", GetType(Integer))
+                    dt.Columns.Add("Avg Mins / Task", GetType(Double))
+                    dt.Columns.Add("Productivity Ratio %", GetType(Double))
+
+                    Dim staffSummaries = Await _timelineService.GetStaffProductivitySummaryReportAsync(startDate, endDate, targetStaffId)
+                    For Each item In staffSummaries
+                        dt.Rows.Add(item.UserName, item.DepartmentName, item.WorkingDaysCount, item.AttendanceWorkingMinutes, item.AttendanceWorkingHours, item.AttendanceBreakMinutes, item.AttendanceBreakHours, item.ProductiveTaskMinutes, item.ProductiveTaskHours, item.CompletedTasksCount, item.AvgMinutesPerCompletedTask, item.ProductivityRatioPercentage)
+                    Next
+
+                Else ' Task Completion Summary
                     dt.Columns.Add("Task Code")
                     dt.Columns.Add("Client Name")
                     dt.Columns.Add("Task Title")
@@ -418,50 +578,31 @@ Namespace Forms.Main
                     Dim filtered = tasks.FindAll(Function(t)
                                                      Dim dateMatch = (t.TargetDueDate.Date >= startDate AndAlso t.TargetDueDate.Date <= endDate)
                                                      Dim clientMatch = (selectedClientId = 0 OrElse t.ClientId = selectedClientId)
-                                                     Return dateMatch AndAlso clientMatch
+                                                     Dim staffMatch = (selectedUserId = 0 OrElse t.AssignedToUserId = selectedUserId)
+                                                     Return dateMatch AndAlso clientMatch AndAlso staffMatch
                                                  End Function)
 
                     For Each t In filtered
                         dt.Rows.Add(t.TaskCode, t.ClientName, t.Title, t.AssignedToName, t.Priority.ToString(), t.TargetDueDate.ToString("dd-MMM-yyyy"), t.WorkflowState.ToString())
                     Next
-
-                ElseIf selectedReport.Contains("Client") Then
-                    dt.Columns.Add("Client Code")
-                    dt.Columns.Add("Client Name")
-                    dt.Columns.Add("Contact Person")
-                    dt.Columns.Add("Phone")
-                    dt.Columns.Add("Email")
-                    dt.Columns.Add("Department")
-
-                    Dim clients = Await _clientService.GetAllClientsAsync()
-                    Dim filtered = clients.FindAll(Function(c) selectedClientId = 0 OrElse c.ClientId = selectedClientId)
-
-                    For Each c In filtered
-                        dt.Rows.Add(c.ClientCode, c.ClientName, c.ContactPerson, c.Phone, c.Email, c.Department.ToString())
-                    Next
-
-                Else ' Staff Attendance Report
-                    dt.Columns.Add("Attendance ID")
-                    dt.Columns.Add("Staff Name")
-                    dt.Columns.Add("Date")
-                    dt.Columns.Add("Punch In")
-                    dt.Columns.Add("Punch Out")
-                    dt.Columns.Add("Hours Worked")
-                    dt.Columns.Add("Status")
-
-                    Dim attendanceLogs = Await _attendanceService.GetAllAttendanceHistoryAsync()
-                    Dim filtered = attendanceLogs.FindAll(Function(a) a.AttendanceDate.Date >= startDate AndAlso a.AttendanceDate.Date <= endDate)
-
-                    For Each a In filtered
-                        Dim pIn = a.ClockInTime.ToString("hh:mm tt")
-                        Dim pOut = If(a.ClockOutTime.HasValue, a.ClockOutTime.Value.ToString("hh:mm tt"), "--")
-                        Dim hrs = If(a.ClockOutTime.HasValue, Math.Round(a.TotalWorkingMinutes / 60.0, 1).ToString() & " hrs", "--")
-                        dt.Rows.Add(a.AttendanceId.ToString(), a.UserName, a.AttendanceDate.ToString("dd-MMM-yyyy"), pIn, pOut, hrs, a.Status)
-                    Next
                 End If
 
-                dgvReportData.DataSource = dt
-                ThemeConstants.ApplyHybridGridColumnSizing(dgvReportData)
+                dgvReportData.SuspendLayout()
+                Try
+                    dgvReportData.DataSource = dt
+                    ThemeConstants.ApplyHybridGridColumnSizing(dgvReportData)
+
+                    ' Apply Accounting Middle-Right Alignment for Numeric Columns
+                    For Each col As DataGridViewColumn In dgvReportData.Columns
+                        Dim headerLower = col.HeaderText.ToLowerInvariant()
+                        If headerLower.Contains("mins") OrElse headerLower.Contains("hours") OrElse headerLower.Contains("tasks") OrElse headerLower.Contains("days") OrElse headerLower.Contains("count") OrElse headerLower.Contains("ratio") Then
+                            col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
+                            col.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight
+                        End If
+                    Next
+                Finally
+                    dgvReportData.ResumeLayout(True)
+                End Try
 
                 lblRecordCount.Text = $"📋 Report Grid Preview ({dt.Rows.Count} Records Loaded from SQL)"
 
@@ -484,6 +625,29 @@ Namespace Forms.Main
 
         Private Async Sub btnExportExcel_Click(sender As Object, e As EventArgs)
             Dim parentForm = TryCast(Me.FindForm(), Form)
+            Dim selectedReportText = If(cboReportType.SelectedItem IsNot Nothing, cboReportType.SelectedItem.ToString(), "Executive Management Productivity Report")
+
+            If selectedReportText.Contains("Staff Daily Activity Report") Then
+                Dim data = _staffActivityControl.GetRawData()
+                If data Is Nothing OrElse data.Count = 0 Then
+                    Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Export Notice", "No report data available to export.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
+                    Return
+                End If
+                Dim excelGen As New Global.StaffAutomation.Reports.Excel.StaffActivityExcelGenerator()
+                Dim exportDir2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CA_Automation_Exports")
+                If Not Directory.Exists(exportDir2) Then Directory.CreateDirectory(exportDir2)
+                Dim fileName2 = $"Staff_Daily_Activity_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx"
+                Dim fullPath2 = Path.Combine(exportDir2, fileName2)
+                
+                excelGen.GenerateExcel(data, fullPath2)
+                Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Export Complete", $"Excel Report Exported Successfully!{Environment.NewLine}{Environment.NewLine}File Path: {fullPath2}", Forms.Common.AlertType.SuccessAlert, actionText:="GREAT")
+                Try
+                    Process.Start("explorer.exe", $"/select,""{fullPath2}""")
+                Catch
+                End Try
+                Return
+            End If
+
             Dim dt = TryCast(dgvReportData.DataSource, DataTable)
             If dt Is Nothing OrElse dt.Rows.Count = 0 Then
                 dt = Await GenerateReportDataAsync()
@@ -498,7 +662,7 @@ Namespace Forms.Main
             Dim fileName = $"Report_Export_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
             Dim fullPath = Path.Combine(exportDir, fileName)
 
-            Dim success = Await _reportGenerator.ExportToCsvAsync(dt, fullPath)
+            Dim success = Await _reportGenerator.ExportToCsvAsync(dt, fullPath, selectedReportText)
             If success Then
                 Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Export Complete", $"Excel/CSV Report Exported Successfully!{Environment.NewLine}{Environment.NewLine}File Path: {fullPath}", Forms.Common.AlertType.SuccessAlert, actionText:="GREAT")
                 Try

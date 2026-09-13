@@ -12,6 +12,7 @@ Imports StaffAutomation.Core.Interfaces
 Imports StaffAutomation.Core.Logging
 Imports StaffAutomation.Core.Security
 Imports StaffAutomation.DAL.Interfaces
+Imports StaffAutomation.BLL.Security
 
 Namespace Services
     ''' <summary>
@@ -25,12 +26,14 @@ Namespace Services
         Private ReadOnly _passwordHasher As IPasswordHasher
         Private ReadOnly _appLogger As IAppLogger
         Private ReadOnly _auditLogger As AuditLogger
+        Private ReadOnly _deviceService As IDeviceService
 
-        Public Sub New(userRepo As IUserRepository, passwordHasher As IPasswordHasher, appLogger As IAppLogger, auditLogger As AuditLogger)
+        Public Sub New(userRepo As IUserRepository, passwordHasher As IPasswordHasher, appLogger As IAppLogger, auditLogger As AuditLogger, deviceService As IDeviceService)
             _userRepo = userRepo
             _passwordHasher = passwordHasher
             _appLogger = appLogger
             _auditLogger = auditLogger
+            _deviceService = deviceService
         End Sub
 
         Public Async Function AuthenticateUserAsync(username As String, password As String) As Task(Of UserDto) Implements IAuthService.AuthenticateUserAsync
@@ -66,6 +69,25 @@ Namespace Services
             If Not isPasswordValid Then
                 _appLogger.LogWarn($"Failed login attempt for user '{username}' due to invalid password.", "AuthService")
                 Throw New AuthenticationException("Invalid username or password.")
+            End If
+
+            ' Perform device validation after successful authentication
+            ' Device validation is ONLY enforced for Staff/Employee roles.
+            If userEntity.Role = UserRole.Employee Then
+#Disable Warning CA1416 ' Suppress OS platform compatibility warning for Windows-specific device fingerprinting
+                Dim clientInfo = DeviceFingerprintHelper.GetClientInfo()
+#Enable Warning CA1416
+                Dim deviceResult = Await _deviceService.ValidateDeviceAsync(userEntity.UserId, clientInfo)
+
+                If Not deviceResult.IsAllowed Then
+                    If deviceResult.Status = DeviceStatus.Pending Then
+                        _appLogger.LogWarn($"Login blocked for user '{username}'. Device pending approval.", "AuthService")
+                        Throw New DevicePendingApprovalException("Your device is currently pending approval. Please contact an administrator to approve this device.")
+                    Else
+                        _appLogger.LogWarn($"Login blocked for user '{username}'. Device access denied (Status: {deviceResult.Status}).", "AuthService")
+                        Throw New DeviceAccessDeniedException("Access from this device has been denied or revoked.")
+                    End If
+                End If
             End If
 
             ' Initialize global user session context

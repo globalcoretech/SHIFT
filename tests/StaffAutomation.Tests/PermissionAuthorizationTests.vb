@@ -318,6 +318,10 @@ Namespace StaffAutomation.Tests
             _rolePerms.Add(New Tuple(Of Integer, String)(roleId, permCode.ToUpper()))
         End Sub
 
+        Public Function GetConnection() As IDbConnection Implements ISqlHelper.GetConnection
+            Return Nothing
+        End Function
+
         Public Function ExecuteNonQueryAsync(commandText As String, parameters As IDbDataParameter(), Optional transaction As IDbTransaction = Nothing) As Task(Of Integer) Implements ISqlHelper.ExecuteNonQueryAsync
             If commandText.Contains("UPDATE dbo.tbl_ComplianceRules") AndAlso parameters IsNot Nothing Then
                 Dim ruleIdParam = parameters.FirstOrDefault(Function(p) p.ParameterName = "@RuleId")
@@ -458,6 +462,10 @@ Namespace StaffAutomation.Tests
 
         Public Class FailingAuthSqlHelper
             Implements ISqlHelper
+
+            Public Function GetConnection() As IDbConnection Implements ISqlHelper.GetConnection
+                Return Nothing
+            End Function
 
             Public Function ExecuteNonQueryAsync(commandText As String, parameters As IDbDataParameter(), Optional transaction As IDbTransaction = Nothing) As Task(Of Integer) Implements ISqlHelper.ExecuteNonQueryAsync
                 Throw New InvalidOperationException("Simulated database connection failure.")

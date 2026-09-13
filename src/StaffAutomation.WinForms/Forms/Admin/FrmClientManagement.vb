@@ -352,9 +352,11 @@ Namespace Forms.Admin
                 Me.Cursor = Cursors.WaitCursor
                 If _selectedClientId = 0 Then
                     Await _clientService.CreateClientAsync(dto)
+                    Forms.Common.DataStateTracker.MarkClientsChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Success", "Client registered successfully with GST & PAN details.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                 Else
                     Await _clientService.UpdateClientAsync(dto)
+                    Forms.Common.DataStateTracker.MarkClientsChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Success", "Client profile updated successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                 End If
                 Await RefreshClientGridAsync()
@@ -385,6 +387,7 @@ Namespace Forms.Admin
                 Try
                     Me.Cursor = Cursors.WaitCursor
                     Await _clientService.SoftDeleteClientAsync(_selectedClientId)
+                    Forms.Common.DataStateTracker.MarkClientsChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Archived", "Client soft-deleted successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                     Await RefreshClientGridAsync()
                     ClearFormInputs()

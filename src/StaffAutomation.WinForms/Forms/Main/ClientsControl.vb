@@ -29,10 +29,13 @@ Namespace Forms.Main
     ''' </summary>
     Public Class ClientsControl
         Inherits UserControl
+        Implements IPreloadableScreen
 
         Private ReadOnly _clientService As IClientService
         Private ReadOnly _appLogger As IAppLogger
         Private ReadOnly _auditLogger As BLL.Logging.AuditLogger
+        Private _activeNavigationToken As Long = 0
+        Private _localClientsDataVersion As Long = 0
 
         Private _clientList As List(Of ClientDto) = New List(Of ClientDto)()
         Private _selectedClient As ClientDto = Nothing
@@ -51,6 +54,7 @@ Namespace Forms.Main
         Private txtSearch As Krypton.Toolkit.KryptonTextBox
         Private cboEntityFilter As Krypton.Toolkit.KryptonComboBox
         Private cboGstFilter As Krypton.Toolkit.KryptonComboBox
+        Private cboStatusFilter As Krypton.Toolkit.KryptonComboBox
 
         Private btnAddNewClient As Forms.Common.ModernButton
         Private btnImportExcel As Forms.Common.ModernButton
@@ -93,6 +97,8 @@ Namespace Forms.Main
         Private pnlSelectionContext As Panel
         Private lblSelectionInfo As Label
         Private btnEditSelectedClient As Forms.Common.ModernButton
+        Private btnDeactivateSelectedClient As Forms.Common.ModernButton
+        Private btnReactivateSelectedClient As Forms.Common.ModernButton
         Private btnClearFilters As Forms.Common.ModernButton
         Private _filterOnlyNeedsVerification As Boolean = False
 
@@ -108,9 +114,17 @@ Namespace Forms.Main
             _clientService = New ClientService(clientRepo, _appLogger, _auditLogger)
             _filterOnlyNeedsVerification = filterNeedsVerification
 
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
+
             InitializeComponent()
+            ThemeConstants.EnableDoubleBuffering(pnlHeroHeader)
+            ThemeConstants.EnableDoubleBuffering(pnlToolbar)
+            ThemeConstants.EnableDoubleBuffering(pnlGridCard)
+            ThemeConstants.EnableDoubleBuffering(dgvClients)
+
             ConfigureExplicitGridColumns()
-            LoadClientDataAsync()
         End Sub
 
         Protected Overrides Sub OnLoad(e As EventArgs)
@@ -135,19 +149,25 @@ Namespace Forms.Main
             Me.Padding = New Padding(16)
             Me.AutoScroll = False
 
-            ' 1. Indigo Hero Header Banner (#1E1B4B to #312E81)
+            ' 1. Unified Luminous Pearl Hero Header Banner (#F5F6F8)
             pnlHeroHeader = New Panel() With {
                 .Dock = DockStyle.Top,
                 .Height = 84,
-                .BackColor = Color.FromArgb(30, 27, 75),
+                .BackColor = ThemeConstants.PearlHeaderBackground,
                 .Padding = New Padding(20, 12, 20, 10),
                 .Margin = New Padding(0, 0, 0, 8)
             }
+            AddHandler pnlHeroHeader.Paint, Sub(s, e)
+                                               e.Graphics.SmoothingMode = SmoothingMode.AntiAlias
+                                               Using p As New Pen(Color.FromArgb(226, 232, 240), 1)
+                                                   e.Graphics.DrawRectangle(p, 0, 0, pnlHeroHeader.Width - 1, pnlHeroHeader.Height - 1)
+                                               End Using
+                                           End Sub
 
             lblHeroTitle = New Label() With {
                 .Text = "CA Master Client Registry",
                 .Font = New Font(ThemeConstants.FontNameDefault, 13.0!, FontStyle.Bold),
-                .ForeColor = Color.White,
+                .ForeColor = ThemeConstants.TextPrimary,
                 .Location = New Point(20, 12),
                 .AutoSize = True
             }
@@ -155,7 +175,7 @@ Namespace Forms.Main
             lblHeroSubtitle = New Label() With {
                 .Text = "Manage client master records, GST verification and client details.",
                 .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Regular),
-                .ForeColor = Color.FromArgb(199, 210, 254),
+                .ForeColor = ThemeConstants.TextSecondary,
                 .Location = New Point(20, 36),
                 .AutoSize = True
             }
@@ -183,7 +203,7 @@ Namespace Forms.Main
             lblHealthText = New Label() With {
                 .Text = "Data Health: 0%",
                 .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold),
-                .ForeColor = Color.FromArgb(224, 231, 255),
+                .ForeColor = ThemeConstants.TextPrimary,
                 .Location = New Point(0, 32),
                 .Size = New Size(315, 18),
                 .TextAlign = ContentAlignment.MiddleRight
@@ -192,7 +212,7 @@ Namespace Forms.Main
             pnlHealthGauge = New Panel() With {
                 .Size = New Size(315, 8),
                 .Location = New Point(0, 52),
-                .BackColor = Color.FromArgb(49, 46, 129)
+                .BackColor = Color.FromArgb(226, 232, 240)
             }
             AddHandler pnlHealthGauge.Paint, Sub(s, e)
                                                  e.Graphics.SmoothingMode = SmoothingMode.AntiAlias
@@ -257,27 +277,30 @@ Namespace Forms.Main
             pnlPsychologyBanner.Controls.Add(btnPsychologyAction)
             pnlPsychologyBanner.Controls.Add(lblPsychologyText)
 
-            ' 2. Windows 11 Fluent Responsive Toolbar Container (Zero Button Overflow)
-            pnlToolbar = New Panel()
-            ThemeConstants.ApplyToolbarStyle(pnlToolbar)
+            ' 2. Windows 11 Fluent Responsive Toolbar Container (Adaptive Logical Grouping)
+            pnlToolbar = New Panel() With {
+                .Dock = DockStyle.Top,
+                .Height = 56,
+                .BackColor = Color.White,
+                .Margin = New Padding(0, 0, 0, 12)
+            }
 
-            ' GROUP A: FIND — Left-aligned Search & Filter Controls Panel (Width = 685)
+            ' GROUP A: FIND — Left-aligned Search & Filter Controls Panel
             pnlSearchControls = New Panel() With {
-                .Dock = DockStyle.Left,
-                .Width = 685,
+                .Size = New Size(725, 44),
                 .BackColor = Color.Transparent
             }
 
             pbSearchIcon = New PictureBox() With {
                 .Image = VectorIconHelper.CreateSearchIcon(ThemeConstants.TextSecondary, 16),
                 .Size = New Size(20, 20),
-                .Location = New Point(10, 18),
+                .Location = New Point(8, 12),
                 .SizeMode = PictureBoxSizeMode.CenterImage
             }
 
             txtSearch = New Krypton.Toolkit.KryptonTextBox() With {
-                .Location = New Point(36, 15),
-                .Size = New Size(280, 26),
+                .Location = New Point(32, 9),
+                .Size = New Size(210, 26),
                 .TabIndex = 0
             }
             ThemeConstants.ApplyAppTextBoxStyle(txtSearch)
@@ -286,8 +309,8 @@ Namespace Forms.Main
 
             cboEntityFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(324, 16),
-                .Size = New Size(135, 24),
+                .Location = New Point(248, 10),
+                .Size = New Size(125, 24),
                 .TabIndex = 1
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboEntityFilter)
@@ -297,8 +320,8 @@ Namespace Forms.Main
 
             cboGstFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(466, 16),
-                .Size = New Size(135, 24),
+                .Location = New Point(379, 10),
+                .Size = New Size(125, 24),
                 .TabIndex = 2
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboGstFilter)
@@ -306,31 +329,43 @@ Namespace Forms.Main
             cboGstFilter.SelectedIndex = 0
             AddHandler cboGstFilter.SelectedIndexChanged, AddressOf FilterGridData
 
+            cboStatusFilter = New Krypton.Toolkit.KryptonComboBox() With {
+                .DropDownStyle = ComboBoxStyle.DropDownList,
+                .Location = New Point(510, 10),
+                .Size = New Size(140, 24),
+                .TabIndex = 3
+            }
+            ThemeConstants.ApplyAppComboBoxStyle(cboStatusFilter)
+            cboStatusFilter.Items.AddRange(New Object() {"Active Clients", "Inactive Clients", "All Clients"})
+            cboStatusFilter.SelectedIndex = 0
+            AddHandler cboStatusFilter.SelectedIndexChanged, AddressOf FilterGridData
+
             btnClearFilters = New Forms.Common.ModernButton() With {
                 .Text = "Clear",
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Secondary,
-                .Size = New Size(68, 24),
-                .Location = New Point(608, 16),
+                .Size = New Size(58, 24),
+                .Location = New Point(656, 10),
                 .Enabled = False
             }
             AddHandler btnClearFilters.Click, Sub(s, e)
                                                   txtSearch.Text = String.Empty
                                                   cboEntityFilter.SelectedIndex = 0
                                                   cboGstFilter.SelectedIndex = 0
+                                                  cboStatusFilter.SelectedIndex = 0
                                                   _filterOnlyNeedsVerification = False
                                                   FilterGridData(Nothing, Nothing)
                                               End Sub
 
             pnlSearchControls.Controls.Add(btnClearFilters)
+            pnlSearchControls.Controls.Add(cboStatusFilter)
             pnlSearchControls.Controls.Add(cboGstFilter)
             pnlSearchControls.Controls.Add(cboEntityFilter)
             pnlSearchControls.Controls.Add(txtSearch)
             pnlSearchControls.Controls.Add(pbSearchIcon)
 
-            ' GROUP B & C: UTILITIES & CREATE — Right-aligned Action Buttons Panel (Right-Anchored, Width = 518)
+            ' GROUP B & C: UTILITIES & CREATE — Action Buttons Panel
             pnlActionControls = New Panel() With {
-                .Dock = DockStyle.Right,
-                .Width = 518,
+                .Size = New Size(505, 44),
                 .BackColor = Color.Transparent
             }
 
@@ -339,8 +374,7 @@ Namespace Forms.Main
                 .Image = VectorIconHelper.CreateRefreshIcon(Color.FromArgb(51, 65, 85), 15),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Secondary,
                 .Size = New Size(95, 36),
-                .Location = New Point(4, 10),
-                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
+                .Location = New Point(0, 4)
             }
             AddHandler btnRefreshGrid.Click, Async Sub(s, e)
                                                 btnRefreshGrid.Enabled = False
@@ -356,9 +390,8 @@ Namespace Forms.Main
                 .Text = " Export",
                 .Image = VectorIconHelper.CreateExportIcon(Color.FromArgb(51, 65, 85), 15),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Secondary,
-                .Size = New Size(110, 36),
-                .Location = New Point(106, 10),
-                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
+                .Size = New Size(100, 36),
+                .Location = New Point(100, 4)
             }
             AddHandler btnExportExcel.Click, AddressOf btnExportExcel_Click
 
@@ -370,19 +403,17 @@ Namespace Forms.Main
                 .ForeColor = Color.FromArgb(67, 56, 202),
                 .CustomBorderColor = Color.FromArgb(199, 210, 254),
                 .HoverColor = Color.FromArgb(224, 231, 255),
-                .Size = New Size(130, 36),
-                .Location = New Point(222, 10),
-                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
+                .Size = New Size(125, 36),
+                .Location = New Point(206, 4)
             }
             AddHandler btnImportExcel.Click, AddressOf btnImportExcel_Click
 
             btnAddNewClient = New Forms.Common.ModernButton() With {
-                .Text = " + Add New Client",
+                .Text = " Add New Client",
                 .Image = VectorIconHelper.CreatePlusIcon(Color.White, 15),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Primary,
-                .Size = New Size(152, 36),
-                .Location = New Point(358, 10),
-                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
+                .Size = New Size(145, 36),
+                .Location = New Point(337, 4)
             }
             AddHandler btnAddNewClient.Click, AddressOf btnAddNewClient_Click
 
@@ -393,6 +424,9 @@ Namespace Forms.Main
 
             pnlToolbar.Controls.Add(pnlActionControls)
             pnlToolbar.Controls.Add(pnlSearchControls)
+
+            AddHandler pnlToolbar.Resize, Sub(s, e) AlignToolbarGroups()
+            AddHandler Me.Resize, Sub(s, e) AlignToolbarGroups()
 
             ' 3. Windows 11 Fluent Data Table Directory Card Container
             pnlGridCard = New Panel() With {
@@ -467,6 +501,46 @@ Namespace Forms.Main
                                                         End If
                                                     End Sub
 
+            btnDeactivateSelectedClient = New Forms.Common.ModernButton() With {
+                .Text = " 🗑️ Deactivate Client",
+                .Scheme = Forms.Common.ModernButton.ButtonScheme.Danger,
+                .Size = New Size(135, 24),
+                .Location = New Point(pnlSelectionContext.Width - 265, 4),
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right,
+                .Visible = False
+            }
+            AddHandler btnDeactivateSelectedClient.Click, Async Sub(s, e)
+                                                            If _selectedClient IsNot Nothing AndAlso _selectedClient.ClientId <> 0 Then
+                                                                If Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Deactivate Client", $"Are you sure you want to deactivate {_selectedClient.ClientName}? Historical records will remain intact.", Forms.Common.AlertType.WarningAlert, "Yes, Deactivate", True, "Cancel") = DialogResult.OK Then
+                                                                    If Await _clientService.SoftDeleteClientAsync(_selectedClient.ClientId) Then
+                                                                        Forms.Common.DataStateTracker.MarkClientsChanged()
+                                                                        LoadClientDataAsync()
+                                                                    End If
+                                                                End If
+                                                            End If
+                                                        End Sub
+
+            btnReactivateSelectedClient = New Forms.Common.ModernButton() With {
+                .Text = " ♻️ Reactivate Client",
+                .Scheme = Forms.Common.ModernButton.ButtonScheme.Primary,
+                .Size = New Size(135, 24),
+                .Location = New Point(pnlSelectionContext.Width - 265, 4),
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right,
+                .Visible = False
+            }
+            AddHandler btnReactivateSelectedClient.Click, Async Sub(s, e)
+                                                            If _selectedClient IsNot Nothing AndAlso _selectedClient.ClientId <> 0 Then
+                                                                If Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Reactivate Client", $"Are you sure you want to reactivate {_selectedClient.ClientName}?", Forms.Common.AlertType.InfoAlert, "Yes, Reactivate", True, "Cancel") = DialogResult.OK Then
+                                                                    If Await _clientService.ReactivateClientAsync(_selectedClient.ClientId) Then
+                                                                        Forms.Common.DataStateTracker.MarkClientsChanged()
+                                                                        LoadClientDataAsync()
+                                                                    End If
+                                                                End If
+                                                            End If
+                                                        End Sub
+
+            pnlSelectionContext.Controls.Add(btnReactivateSelectedClient)
+            pnlSelectionContext.Controls.Add(btnDeactivateSelectedClient)
             pnlSelectionContext.Controls.Add(btnEditSelectedClient)
             pnlSelectionContext.Controls.Add(lblSelectionInfo)
 
@@ -585,6 +659,30 @@ Namespace Forms.Main
             Me.Controls.Add(pnlHeroHeader)
 
             Me.ResumeLayout(False)
+        End Sub
+
+        ''' <summary>
+        ''' Adaptively positions Search/Filter controls (Group A) and Action Buttons (Group B/C).
+        ''' Preserves horizontal side-by-side alignment on wide workspaces (>= 1090px).
+        ''' On narrow effective widths or high DPI, reflows Group B onto Row 2 cleanly without control overlap.
+        ''' </summary>
+        Private Sub AlignToolbarGroups()
+            If pnlToolbar Is Nothing OrElse pnlSearchControls Is Nothing OrElse pnlActionControls Is Nothing Then Return
+
+            Dim availWidth As Integer = pnlToolbar.ClientSize.Width
+            Dim groupAWidth As Integer = pnlSearchControls.Width ' 572
+            Dim groupBWidth As Integer = pnlActionControls.Width ' 505
+            Dim minRequiredSingleLineWidth As Integer = groupAWidth + groupBWidth + 12 ' 1089
+
+            If availWidth >= minRequiredSingleLineWidth Then
+                pnlSearchControls.Location = New Point(0, Math.Max(0, (56 - pnlSearchControls.Height) \ 2))
+                pnlActionControls.Location = New Point(Math.Max(groupAWidth + 12, availWidth - groupBWidth), Math.Max(0, (56 - pnlActionControls.Height) \ 2))
+                pnlToolbar.Height = 56
+            Else
+                pnlSearchControls.Location = New Point(0, 4)
+                pnlActionControls.Location = New Point(0, pnlSearchControls.Bottom + 2)
+                pnlToolbar.Height = pnlActionControls.Bottom + 6
+            End If
         End Sub
 
         Private Function CreateFluentButton(text As String, icon As Bitmap, bg As Color, fg As Color, border As Color) As Button
@@ -737,9 +835,24 @@ Namespace Forms.Main
             _layoutManager.LoadLayout()
         End Sub
 
+        Public Async Function PreloadDataAsync(navigationToken As Long) As Task Implements IPreloadableScreen.PreloadDataAsync
+            _activeNavigationToken = navigationToken
+            If _clientList IsNot Nothing AndAlso _clientList.Count > 0 AndAlso _localClientsDataVersion = Forms.Common.DataStateTracker.ClientsDataVersion Then
+                FilterGridData(Nothing, Nothing)
+                Return
+            End If
+            Await LoadClientDataInternalAsync(navigationToken)
+        End Function
+
         Public Async Sub LoadClientDataAsync()
+            Await LoadClientDataInternalAsync(0)
+        End Sub
+
+        Private Async Function LoadClientDataInternalAsync(token As Long) As Task
             Try
                 _clientList = Await _clientService.GetAllClientsAsync(includeDeleted:=True)
+                _localClientsDataVersion = Forms.Common.DataStateTracker.ClientsDataVersion
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
                 FilterGridData(Nothing, Nothing)
 
                 ' Calculate Zeigarnik Data Health Score (%) & Stat Badges
@@ -792,7 +905,7 @@ Namespace Forms.Main
             Catch ex As Exception
                 _appLogger.LogError($"Failed to load client data: {ex.Message}")
             End Try
-        End Sub
+        End Function
 
         Public Sub ApplyNeedsVerificationFilter(filterNeedsVerification As Boolean)
             _filterOnlyNeedsVerification = filterNeedsVerification
@@ -817,10 +930,15 @@ Namespace Forms.Main
             Dim search = txtSearch.Text.Trim().ToLower()
             Dim selEntity = If(cboEntityFilter.SelectedItem IsNot Nothing, cboEntityFilter.SelectedItem.ToString(), "All Entity Types")
             Dim selGst = If(cboGstFilter.SelectedItem IsNot Nothing, cboGstFilter.SelectedItem.ToString(), "All GST Schemes")
+            Dim selStatus = If(cboStatusFilter.SelectedItem IsNot Nothing, cboStatusFilter.SelectedItem.ToString(), "Active Clients")
 
             Dim filtered As New List(Of ClientDto)()
             For Each c In _clientList
-                If c.IsActive AndAlso Not c.IsDeleted Then
+                Dim matchesStatus As Boolean = (selStatus = "Active Clients" AndAlso Not c.IsDeleted) OrElse
+                                               (selStatus = "Inactive Clients" AndAlso c.IsDeleted) OrElse
+                                               (selStatus = "All Clients")
+
+                If matchesStatus Then
                     Dim matchesEntity As Boolean = (selEntity = "All Entity Types" OrElse String.Equals(c.EntityType, selEntity, StringComparison.OrdinalIgnoreCase))
                     Dim matchesGst As Boolean = (selGst = "All GST Schemes" OrElse String.Equals(c.GstType, selGst, StringComparison.OrdinalIgnoreCase))
                     Dim matchesNeedsVerification As Boolean = (Not _filterOnlyNeedsVerification OrElse Not c.IsLiveApiData)
@@ -889,10 +1007,12 @@ Namespace Forms.Main
                 _isEmptyPlaceholderActive = False
             End If
 
-            dgvClients.DataSource = Nothing
-            dgvClients.DataSource = filtered
-            dgvClients.Refresh()
-            dgvClients.Update()
+            dgvClients.SuspendLayout()
+            Try
+                dgvClients.DataSource = filtered
+            Finally
+                dgvClients.ResumeLayout(True)
+            End Try
 
             PositionEmptyStateOverlay()
             UpdateClearButtonState()
@@ -903,7 +1023,8 @@ Namespace Forms.Main
             Dim hasActiveSearch = (txtSearch IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(txtSearch.Text))
             Dim hasEntityFilter = (cboEntityFilter IsNot Nothing AndAlso cboEntityFilter.SelectedIndex > 0)
             Dim hasGstFilter = (cboGstFilter IsNot Nothing AndAlso cboGstFilter.SelectedIndex > 0)
-            Dim isFilterActive = (hasActiveSearch OrElse hasEntityFilter OrElse hasGstFilter OrElse _filterOnlyNeedsVerification)
+            Dim hasStatusFilter = (cboStatusFilter IsNot Nothing AndAlso cboStatusFilter.SelectedIndex > 0)
+            Dim isFilterActive = (hasActiveSearch OrElse hasEntityFilter OrElse hasGstFilter OrElse hasStatusFilter OrElse _filterOnlyNeedsVerification)
 
             btnClearFilters.Enabled = isFilterActive
             If isFilterActive Then
@@ -993,6 +1114,14 @@ Namespace Forms.Main
                     pnlSelectionContext.Visible = True
                     Dim statusText = If(_selectedClient.IsLiveApiData, "✓ GST Verified", "⚠ Needs Verification")
                     lblSelectionInfo.Text = $"{_selectedClient.ClientName} · {_selectedClient.ClientCode}   •   {statusText}   •   {_selectedClient.EntityType}   •   {_selectedClient.StateName}"
+
+                    If _selectedClient.IsDeleted Then
+                        btnDeactivateSelectedClient.Visible = False
+                        btnReactivateSelectedClient.Visible = True
+                    Else
+                        btnDeactivateSelectedClient.Visible = True
+                        btnReactivateSelectedClient.Visible = False
+                    End If
                 Else
                     pnlSelectionContext.Visible = False
                 End If

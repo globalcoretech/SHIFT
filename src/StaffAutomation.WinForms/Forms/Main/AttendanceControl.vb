@@ -1,5 +1,6 @@
 Option Strict On
 Option Explicit On
+Imports StaffAutomation.Core.Enums
 
 Imports System
 Imports System.Collections.Generic
@@ -312,6 +313,7 @@ Namespace Forms.Main
     ''' </summary>
     Public Class AttendanceControl
         Inherits UserControl
+        Implements IPreloadableScreen
 
         Private ReadOnly _attendanceService As IAttendanceService
         Private ReadOnly _policyEngine As IAttendancePolicyEngine
@@ -321,6 +323,8 @@ Namespace Forms.Main
         Private _todayRecord As AttendanceDto = Nothing
         Private _lastResult As WorkdayProgressResult = Nothing
         Private _allHistory As List(Of AttendanceDto) = New List(Of AttendanceDto)()
+        Private _activeNavigationToken As Long = 0
+        Private _localAttendanceDataVersion As Long = 0
 
         Private ReadOnly tmrClock As Timer
 
@@ -395,8 +399,12 @@ Namespace Forms.Main
             Dim auditLogger As New AuditLogger(sqlHelper)
             Dim attendanceRepo As DAL.Interfaces.IAttendanceRepository = New AttendanceRepository(sqlHelper)
             Dim userRepo As DAL.Interfaces.IUserRepository = New UserRepository(sqlHelper)
+            Dim taskRepo As DAL.Interfaces.ITaskRepository = New TaskRepository(sqlHelper)
+            Dim activityRepo As DAL.Interfaces.ITaskActivityRepository = New TaskActivityRepository(sqlHelper)
+            Dim workflowEngine As ITaskWorkflowEngine = New TaskWorkflowEngine()
+            Dim timelineService As ITimelineService = New TimelineService(activityRepo, taskRepo, workflowEngine, appLogger, auditLogger)
 
-            _attendanceService = New AttendanceService(attendanceRepo, userRepo, appLogger, auditLogger)
+            _attendanceService = New AttendanceService(attendanceRepo, userRepo, appLogger, auditLogger, timelineService)
             _policyEngine = New AttendancePolicyEngine()
             _policyProvider = New DefaultAttendancePolicyProvider()
 
@@ -407,10 +415,17 @@ Namespace Forms.Main
             tmrClock = New Timer() With {.Interval = 1000}
             AddHandler tmrClock.Tick, AddressOf tmrClock_Tick
 
-            InitializeComponent()
-            tmrClock.Start()
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
 
-            RefreshAttendanceScreenAsync()
+            InitializeComponent()
+            ThemeConstants.EnableDoubleBuffering(pnlHeader)
+            ThemeConstants.EnableDoubleBuffering(pnlActionBox)
+            ThemeConstants.EnableDoubleBuffering(pnlGridBox)
+            ThemeConstants.EnableDoubleBuffering(dgvAttendance)
+
+            tmrClock.Start()
         End Sub
 
         Private Sub InitializeComponent()
@@ -832,6 +847,10 @@ Namespace Forms.Main
             pnlGridBox.Controls.Add(lblGridHeader)
 
             Me.Controls.Add(pnlGridBox)
+            
+            Dim shell = TryCast(Me.FindForm(), FrmMainShell)
+            Dim isPendingAction = False ' At initialization, it might be false, we'll update it in Refresh
+            
             Me.Controls.Add(pnlActionBox)
             Me.Controls.Add(pnlHeader)
 
@@ -873,19 +892,48 @@ Namespace Forms.Main
             BindWorkdayProgressUI(_lastResult)
         End Sub
 
+        Public Async Function PreloadDataAsync(navigationToken As Long) As Task Implements IPreloadableScreen.PreloadDataAsync
+            _activeNavigationToken = navigationToken
+            If _todayRecord IsNot Nothing AndAlso _localAttendanceDataVersion = Forms.Common.DataStateTracker.AttendanceDataVersion Then
+                ApplyGridFilters()
+                Return
+            End If
+            Await RefreshAttendanceScreenInternalAsync(navigationToken)
+        End Function
+
         Private Async Sub RefreshAttendanceScreenAsync()
+            Await RefreshAttendanceScreenInternalAsync(0)
+        End Sub
+
+        Private Async Function RefreshAttendanceScreenInternalAsync(token As Long) As Task
             Try
                 Me.Cursor = Cursors.WaitCursor
 
                 If CurrentUserContext.IsAuthenticated Then
                     _currentUserId = CurrentUserContext.CurrentUser.UserId
                     lblCurrentUser.Text = $"👤 Staff: {CurrentUserContext.CurrentUser.FullName}"
+                    
+                    Dim isEmployee = (CurrentUserContext.CurrentUser.Role = UserRole.Employee)
+                    
+                    btnPunchIn.Visible = Not isEmployee
+                    btnPunchBreak.Visible = Not isEmployee
+                    btnPunchOut.Visible = Not isEmployee
+                    lblDisabledReason.Visible = Not isEmployee
+                    
+#If DEBUG Then
+                    If btnDevReset IsNot Nothing Then btnDevReset.Visible = Not isEmployee
+#End If
+                    
+                    ' Keep the action box visible so employees can see their status, timer, and metrics
+                    pnlActionBox.Visible = True
                 Else
                     lblCurrentUser.Text = "👤 Staff: Active User"
                 End If
 
                 ' 1. Load Today's Attendance Record for Current User
                 _todayRecord = Await _attendanceService.GetTodayAttendanceForUserAsync(_currentUserId)
+                _localAttendanceDataVersion = Forms.Common.DataStateTracker.AttendanceDataVersion
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
 
                 ' 2. Calculate Workday Progress Facts via Policy Engine
                 Dim policy = Await _policyProvider.GetEffectivePolicyAsync(_currentUserId, DateTime.Today)
@@ -899,6 +947,7 @@ Namespace Forms.Main
 
                 ' 3. Load Personal Attendance History Grid & Cache for Filters
                 _allHistory = Await _attendanceService.GetUserAttendanceHistoryAsync(_currentUserId)
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
                 ApplyGridFilters()
             Catch ex As Exception
                 pnlStatusPill.BadgeText = "Error Loading Status"
@@ -906,7 +955,7 @@ Namespace Forms.Main
             Finally
                 Me.Cursor = Cursors.Default
             End Try
-        End Sub
+        End Function
 
         Private Sub ApplyGridFilters()
             If _allHistory Is Nothing Then Return
@@ -1179,6 +1228,7 @@ Namespace Forms.Main
             Try
                 Me.Cursor = Cursors.WaitCursor
                 Await _attendanceService.ClockInUserAsync(_currentUserId, "127.0.0.1")
+                Forms.Common.DataStateTracker.MarkAttendanceChanged()
                 RefreshAttendanceScreenAsync()
 
                 Dim shell = TryCast(Me.FindForm(), FrmMainShell)
@@ -1207,6 +1257,7 @@ Namespace Forms.Main
                     ' Start Lunch Break
                     Await _attendanceService.StartLunchBreakAsync(_currentUserId)
                 End If
+                Forms.Common.DataStateTracker.MarkAttendanceChanged()
                 RefreshAttendanceScreenAsync()
             Catch ex As BusinessException
                 Dim shell = TryCast(Me.FindForm(), FrmMainShell)
@@ -1220,24 +1271,42 @@ Namespace Forms.Main
         End Sub
 
         Private Async Sub btnPunchOut_Click(sender As Object, e As EventArgs)
+            Dim mainShell = TryCast(Me.FindForm(), FrmMainShell)
             Try
                 Me.Cursor = Cursors.WaitCursor
+                
+                If _todayRecord IsNot Nothing AndAlso Not _todayRecord.BreakStartTime.HasValue Then
+                    Dim confirmMsg As String = "End your shift for today? This will close today's attendance record."
+                    If _todayRecord.TotalBreakMinutes = 0 Then
+                        confirmMsg = "You haven't taken a lunch break today." & vbCrLf & "End your shift for today anyway?"
+                    End If
+                    
+                    Dim confirm = Forms.Common.FrmInAppAlert.ShowModal(mainShell, "Confirm Punch Out", confirmMsg, Forms.Common.AlertType.WarningAlert, actionText:="YES, PUNCH OUT", showCancel:=True, cancelText:="CANCEL")
+                    If confirm <> DialogResult.OK Then
+                        Return
+                    End If
+                End If
+                
                 Dim success = Await _attendanceService.ClockOutUserAsync(_currentUserId, totalBreakMinutes:=0)
                 If success Then
+                    Forms.Common.DataStateTracker.MarkAttendanceChanged()
                     RefreshAttendanceScreenAsync()
 
-                    Dim shell = TryCast(Me.FindForm(), FrmMainShell)
-                    If shell IsNot Nothing Then
-                        shell.UpdateLogoutButtonState(isClockedIn:=True, isWorkdayCompleted:=True)
-                        Forms.Common.FrmInAppAlert.ShowModal(shell, "Shift Ended", "Punch Out Successful! Your shift has ended for today." & vbCrLf & "Logout is now unlocked.", Forms.Common.AlertType.SuccessAlert, actionText:="GREAT — SHIFT COMPLETED")
+                    mainShell = TryCast(Me.FindForm(), FrmMainShell)
+                    If mainShell IsNot Nothing Then
+                        mainShell.UpdateLogoutButtonState(isClockedIn:=True, isWorkdayCompleted:=True)
+                        
+                        If Not mainShell.ExecutePendingAction() Then
+                            Forms.Common.FrmInAppAlert.ShowModal(mainShell, "Shift Ended", "Punch Out Successful! Your shift has ended for today." & vbCrLf & "Logout is now unlocked.", Forms.Common.AlertType.SuccessAlert, actionText:="GREAT — SHIFT COMPLETED")
+                        End If
                     End If
                 End If
             Catch ex As BusinessException
-                Dim shell = TryCast(Me.FindForm(), FrmMainShell)
-                Forms.Common.FrmInAppAlert.ShowModal(shell, "Clock-Out Warning", ex.Message, Forms.Common.AlertType.WarningAlert, actionText:="OK")
+                mainShell = TryCast(Me.FindForm(), FrmMainShell)
+                Forms.Common.FrmInAppAlert.ShowModal(mainShell, "Clock-Out Warning", ex.Message, Forms.Common.AlertType.WarningAlert, actionText:="OK")
             Catch ex As Exception
-                Dim shell = TryCast(Me.FindForm(), FrmMainShell)
-                Forms.Common.FrmInAppAlert.ShowModal(shell, "Error", "Unable to save attendance: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                mainShell = TryCast(Me.FindForm(), FrmMainShell)
+                Forms.Common.FrmInAppAlert.ShowModal(mainShell, "Error", "Unable to save attendance: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
             Finally
                 Me.Cursor = Cursors.Default
             End Try
@@ -1251,6 +1320,7 @@ Namespace Forms.Main
                 Try
                     Me.Cursor = Cursors.WaitCursor
                     Await _attendanceService.ResetTodayAttendanceAsync(_currentUserId)
+                    Forms.Common.DataStateTracker.MarkAttendanceChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(shell, "Dev Reset Complete", "Today's attendance record reset successfully! You can now test Punch In & Punch Out live.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                     RefreshAttendanceScreenAsync()
                 Catch ex As Exception

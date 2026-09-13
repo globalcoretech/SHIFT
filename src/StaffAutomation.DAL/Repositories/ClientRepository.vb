@@ -97,9 +97,22 @@ Namespace Repositories
                 query &= "WHERE " & String.Join(" AND ", whereClause) & " "
             End If
 
-            query &= "ORDER BY ClientName ASC;"
+            Dim list = Await _sqlHelper.ExecuteReaderAsync(query, params.ToArray(), AddressOf MapClientEntity)
+            Dim resCount As Integer = If(list IsNot Nothing, list.Count, 0)
+            System.Diagnostics.Trace.WriteLine($"[ClientDropdown] DB fetch started | Query: {query}")
+            System.Diagnostics.Trace.WriteLine($"[ClientDropdown] SQL returned: {resCount} rows")
+            System.Diagnostics.Trace.WriteLine($"[ClientDropdown] Repository materialized: {resCount} clients")
+            Return list
+        End Function
 
-            Return Await _sqlHelper.ExecuteReaderAsync(query, params.ToArray(), AddressOf MapClientEntity)
+        Public Async Function GetClientsByAssignedUserAsync(userId As Integer) As Task(Of List(Of ClientEntity)) Implements IClientRepository.GetClientsByAssignedUserAsync
+            Await EnsureSchemaColumnsAsync()
+            Const query As String = "SELECT DISTINCT c.ClientId, c.ClientCode, c.ClientName, c.ContactPerson, c.Phone, c.Email, c.PAN AS PanNumber, c.GSTIN AS Gstin, c.StateName, c.District, c.Pincode, c.Address, c.EntityType, c.GstType, c.IsLiveApiData, c.DepartmentId, c.IsActive, c.IsDeleted, c.CreatedOn, c.CreatedBy, c.ModifiedOn, c.ModifiedBy " &
+                                   "FROM dbo.tbl_Clients c " &
+                                   "INNER JOIN dbo.tbl_Tasks t ON c.ClientId = t.ClientId " &
+                                   "WHERE t.AssignedToUserId = @UserId AND c.IsDeleted = 0 AND t.IsDeleted = 0;"
+            Dim params As SqlParameter() = {New SqlParameter("@UserId", userId)}
+            Return Await _sqlHelper.ExecuteReaderAsync(query, params, AddressOf MapClientEntity)
         End Function
 
         Public Async Function AddAsync(client As ClientEntity) As Task(Of Integer) Implements IClientRepository.AddAsync
@@ -122,11 +135,55 @@ Namespace Repositories
                 New SqlParameter("@EntityType", If(String.IsNullOrEmpty(client.EntityType), CObj(DBNull.Value), client.EntityType)),
                 New SqlParameter("@GstType", If(String.IsNullOrEmpty(client.GstType), CObj(DBNull.Value), client.GstType)),
                 New SqlParameter("@IsLiveApiData", client.IsLiveApiData),
-                New SqlParameter("@DepartmentId", CInt(client.Department)),
+                New SqlParameter("@DepartmentId", If(client.Department.HasValue, CObj(CInt(client.Department.Value)), DBNull.Value)),
                 New SqlParameter("@IsActive", client.IsActive),
                 New SqlParameter("@CreatedBy", client.CreatedBy)
             }
             Return Await _sqlHelper.ExecuteScalarAsync(Of Integer)(query, params)
+        End Function
+
+        Public Async Function AddBulkAsync(clients As IEnumerable(Of ClientEntity)) As Task(Of Integer) Implements IClientRepository.AddBulkAsync
+            Await EnsureSchemaColumnsAsync()
+            
+            Dim successCount As Integer = 0
+            Using conn As SqlConnection = CType(_sqlHelper.GetConnection(), SqlConnection)
+                Await conn.OpenAsync()
+                Using tx As SqlTransaction = CType(Await conn.BeginTransactionAsync(), SqlTransaction)
+                    Try
+                        For Each client In clients
+                            Const query As String = "INSERT INTO dbo.tbl_Clients (ClientCode, ClientName, ClientCategoryId, ContactPerson, Phone, Email, PAN, GSTIN, StateName, District, Pincode, Address, EntityType, GstType, IsLiveApiData, DepartmentId, IsActive, IsDeleted, CreatedOn, CreatedBy) " &
+                                                   "VALUES (@ClientCode, @ClientName, ISNULL((SELECT TOP 1 ClientCategoryId FROM dbo.tbl_ClientCategories), 1), @ContactPerson, @Phone, @Email, @PanNumber, @Gstin, @StateName, @District, @Pincode, @Address, @EntityType, @GstType, @IsLiveApiData, @DepartmentId, @IsActive, 0, GETUTCDATE(), @CreatedBy); " &
+                                                   "SELECT SCOPE_IDENTITY();"
+                            Dim params As SqlParameter() = {
+                                New SqlParameter("@ClientCode", client.ClientCode),
+                                New SqlParameter("@ClientName", client.ClientName),
+                                New SqlParameter("@ContactPerson", If(String.IsNullOrEmpty(client.ContactPerson), CObj(DBNull.Value), client.ContactPerson)),
+                                New SqlParameter("@Phone", If(String.IsNullOrEmpty(client.Phone), CObj(DBNull.Value), client.Phone)),
+                                New SqlParameter("@Email", If(String.IsNullOrEmpty(client.Email), CObj(DBNull.Value), client.Email)),
+                                New SqlParameter("@PanNumber", If(String.IsNullOrEmpty(client.PanNumber), CObj(DBNull.Value), client.PanNumber)),
+                                New SqlParameter("@Gstin", If(String.IsNullOrEmpty(client.Gstin), CObj(DBNull.Value), client.Gstin)),
+                                New SqlParameter("@StateName", If(String.IsNullOrEmpty(client.StateName), CObj(DBNull.Value), client.StateName)),
+                                New SqlParameter("@District", If(String.IsNullOrEmpty(client.District), CObj(DBNull.Value), client.District)),
+                                New SqlParameter("@Pincode", If(String.IsNullOrEmpty(client.Pincode), CObj(DBNull.Value), client.Pincode)),
+                                New SqlParameter("@Address", If(String.IsNullOrEmpty(client.Address), CObj(DBNull.Value), client.Address)),
+                                New SqlParameter("@EntityType", If(String.IsNullOrEmpty(client.EntityType), CObj(DBNull.Value), client.EntityType)),
+                                New SqlParameter("@GstType", If(String.IsNullOrEmpty(client.GstType), CObj(DBNull.Value), client.GstType)),
+                                New SqlParameter("@IsLiveApiData", client.IsLiveApiData),
+                                New SqlParameter("@DepartmentId", If(client.Department.HasValue, CObj(CInt(client.Department.Value)), DBNull.Value)),
+                                New SqlParameter("@IsActive", client.IsActive),
+                                New SqlParameter("@CreatedBy", client.CreatedBy)
+                            }
+                            Await _sqlHelper.ExecuteScalarAsync(Of Integer)(query, params, tx)
+                            successCount += 1
+                        Next
+                        Await tx.CommitAsync()
+                        Return successCount
+                    Catch ex As Exception
+                        tx.Rollback()
+                        Throw
+                    End Try
+                End Using
+            End Using
         End Function
 
         Public Async Function UpdateAsync(client As ClientEntity) As Task(Of Boolean) Implements IClientRepository.UpdateAsync
@@ -148,7 +205,7 @@ Namespace Repositories
                 New SqlParameter("@EntityType", If(String.IsNullOrEmpty(client.EntityType), CObj(DBNull.Value), client.EntityType)),
                 New SqlParameter("@GstType", If(String.IsNullOrEmpty(client.GstType), CObj(DBNull.Value), client.GstType)),
                 New SqlParameter("@IsLiveApiData", client.IsLiveApiData),
-                New SqlParameter("@DepartmentId", CInt(client.Department)),
+                New SqlParameter("@DepartmentId", If(client.Department.HasValue, CObj(CInt(client.Department.Value)), DBNull.Value)),
                 New SqlParameter("@IsActive", client.IsActive),
                 New SqlParameter("@ModifiedBy", If(client.ModifiedBy.HasValue, CObj(client.ModifiedBy.Value), DBNull.Value)),
                 New SqlParameter("@ClientId", client.ClientId)
@@ -159,6 +216,16 @@ Namespace Repositories
 
         Public Async Function SoftDeleteAsync(clientId As Integer, modifiedBy As Integer) As Task(Of Boolean) Implements IClientRepository.SoftDeleteAsync
             Const query As String = "UPDATE dbo.tbl_Clients SET IsDeleted = 1, ModifiedOn = GETUTCDATE(), ModifiedBy = @ModifiedBy WHERE ClientId = @ClientId;"
+            Dim params As SqlParameter() = {
+                New SqlParameter("@ModifiedBy", modifiedBy),
+                New SqlParameter("@ClientId", clientId)
+            }
+            Dim rows = Await _sqlHelper.ExecuteNonQueryAsync(query, params)
+            Return rows > 0
+        End Function
+
+        Public Async Function ReactivateAsync(clientId As Integer, modifiedBy As Integer) As Task(Of Boolean) Implements IClientRepository.ReactivateAsync
+            Const query As String = "UPDATE dbo.tbl_Clients SET IsDeleted = 0, ModifiedOn = GETUTCDATE(), ModifiedBy = @ModifiedBy WHERE ClientId = @ClientId;"
             Dim params As SqlParameter() = {
                 New SqlParameter("@ModifiedBy", modifiedBy),
                 New SqlParameter("@ClientId", clientId)
@@ -184,7 +251,7 @@ Namespace Repositories
                 .EntityType = If(reader.HasColumn("EntityType") AndAlso reader("EntityType") IsNot DBNull.Value, Convert.ToString(reader("EntityType")), "Proprietorship"),
                 .GstType = If(reader.HasColumn("GstType") AndAlso reader("GstType") IsNot DBNull.Value, Convert.ToString(reader("GstType")), "Regular Monthly"),
                 .IsLiveApiData = If(reader.HasColumn("IsLiveApiData") AndAlso reader("IsLiveApiData") IsNot DBNull.Value, Convert.ToBoolean(reader("IsLiveApiData")), False),
-                .Department = CType(Convert.ToInt32(reader("DepartmentId")), DepartmentType),
+                .Department = If(reader("DepartmentId") Is DBNull.Value, CType(Nothing, Nullable(Of DepartmentType)), CType(Convert.ToInt32(reader("DepartmentId")), Nullable(Of DepartmentType))),
                 .IsActive = Convert.ToBoolean(reader("IsActive")),
                 .IsDeleted = Convert.ToBoolean(reader("IsDeleted")),
                 .CreatedOn = Convert.ToDateTime(reader("CreatedOn")),

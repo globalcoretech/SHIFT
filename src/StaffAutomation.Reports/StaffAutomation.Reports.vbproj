@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.102.3" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\StaffAutomation.Core\StaffAutomation.Core.vbproj" />
   </ItemGroup>
 

@@ -69,12 +69,11 @@ Namespace Forms.Admin
 
         ' Tab 3: Disaster Restoration Controls
         Private pnlRestoreHost As Panel
-        Private txtRestorePath As Krypton.Toolkit.KryptonTextBox
-        Private btnBrowseRestoreFile As ModernButton
-        Private btnValidateRestoreFile As ModernButton
-        Private btnInitiateRestore As ModernButton
-        Private lblRestoreValidationStatus As Label
-        Private txtRestoreLog As TextBox
+        Private lblLatestBackupDetails As Label
+        Private btnRestoreLatest As ModernButton
+        Private btnChooseAnother As ModernButton
+        Private lblCustomBackupStatus As Label
+        Private lblRestoreProgress As Label
 
         ' Tab 4: Settings Controls
         Private txtPrimaryPath As Krypton.Toolkit.KryptonTextBox
@@ -131,7 +130,7 @@ Namespace Forms.Admin
             ' 1. Indigo Hero Page Header
             pnlHeroHeader = New Panel()
             lblHeroTitle = New Label() With {.Text = "Database Protection & Disaster Recovery Console"}
-            lblHeroSubtitle = New Label() With {.Text = "Manage automated T-SQL backups, RESTORE VERIFYONLY, SHA-256 checksum integrity, DBCC CHECKDB, and emergency restoration."}
+            lblHeroSubtitle = New Label() With {.Text = "Manage backups and safely restore your office data when needed."}
             ThemeConstants.ApplyHeaderStyle(pnlHeroHeader, lblHeroTitle, lblHeroSubtitle)
 
             ' Top-Right Navigation Header Controls
@@ -145,8 +144,8 @@ Namespace Forms.Admin
             }
 
             btnHeaderBack = New Krypton.Toolkit.KryptonButton() With {
-                .Text = "< Back to Administration",
-                .Size = New Size(175, 32),
+                .Text = "← Back to Settings",
+                .Size = New Size(160, 32),
                 .Margin = New Padding(0)
             }
             ThemeConstants.ApplyKryptonSecondaryButton(btnHeaderBack)
@@ -429,70 +428,72 @@ Namespace Forms.Admin
 
             pnlRestoreHost = New Panel() With {.Dock = DockStyle.Fill, .BackColor = Color.Transparent}
 
-            Dim lblWarnHeader As New Label() With {
-                .Text = "CONTROLLED DISASTER RESTORATION WORKFLOW",
-                .Font = New Font(ThemeConstants.FontNameDefault, 10.0!, FontStyle.Bold),
-                .ForeColor = Color.FromArgb(185, 28, 28),
+            Dim lblRestoreTitle As New Label() With {
+                .Text = "Restore Database",
+                .Font = New Font(ThemeConstants.FontNameDefault, 14.0!, FontStyle.Bold),
+                .ForeColor = ThemeConstants.TextPrimary,
                 .Location = New Point(0, 0),
                 .AutoSize = True
             }
 
-            Dim lblWarnDesc As New Label() With {
-                .Text = "Restoring a database replaces all active records in 'StaffAutomationDb' with the selected backup archive." & Environment.NewLine &
-                        "An emergency backup will be taken automatically before any destructive restore process begins.",
-                .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Regular),
-                .ForeColor = ThemeConstants.TextPrimary,
-                .Location = New Point(0, 24),
-                .Size = New Size(800, 36)
+            Dim lblRestoreDesc As New Label() With {
+                .Text = "Restore your office data from a previously created backup.",
+                .Font = New Font(ThemeConstants.FontNameDefault, 10.0!, FontStyle.Regular),
+                .ForeColor = ThemeConstants.TextSecondary,
+                .Location = New Point(0, 30),
+                .Size = New Size(800, 24)
             }
 
-            Dim lblPathHeader As New Label() With {.Text = "Select Backup File (.bak):", .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold), .Location = New Point(0, 72), .AutoSize = True}
-
-            txtRestorePath = New Krypton.Toolkit.KryptonTextBox() With {.Location = New Point(0, 94), .Size = New Size(620, 28)}
-            ThemeConstants.ApplyAppTextBoxStyle(txtRestorePath)
-
-            btnBrowseRestoreFile = New ModernButton() With {.Text = "Browse...", .Scheme = ModernButton.ButtonScheme.Secondary, .Size = New Size(95, 28), .Location = New Point(630, 94)}
-            AddHandler btnBrowseRestoreFile.Click, AddressOf btnBrowseRestoreFile_Click
-
-            btnValidateRestoreFile = New ModernButton() With {.Text = "Validate Backup File", .Scheme = ModernButton.ButtonScheme.Primary, .Size = New Size(170, 28), .Location = New Point(735, 94)}
-            AddHandler btnValidateRestoreFile.Click, AddressOf btnValidateRestoreFile_Click
-
-            lblRestoreValidationStatus = New Label() With {
-                .Text = "Validation Status: Awaiting backup file selection.",
-                .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold),
-                .ForeColor = ThemeConstants.TextSecondary,
-                .Location = New Point(0, 132),
+            lblLatestBackupDetails = New Label() With {
+                .Text = "Latest Verified Backup: Fetching...",
+                .Font = New Font(ThemeConstants.FontNameDefault, 10.0!, FontStyle.Regular),
+                .ForeColor = ThemeConstants.TextPrimary,
+                .Location = New Point(0, 70),
                 .AutoSize = True
             }
 
-            txtRestoreLog = New TextBox() With {
-                .Multiline = True,
-                .ReadOnly = True,
-                .ScrollBars = ScrollBars.Vertical,
-                .Location = New Point(0, 160),
-                .Size = New Size(900, 240),
-                .Font = New Font("Consolas", 8.5!, FontStyle.Regular),
-                .BackColor = Color.FromArgb(248, 250, 252)
-            }
-
-            btnInitiateRestore = New ModernButton() With {
-                .Text = "Initiate Controlled Restore Engine",
-                .Scheme = ModernButton.ButtonScheme.Danger,
+            btnRestoreLatest = New ModernButton() With {
+                .Text = "Restore Latest Verified Backup",
+                .Scheme = ModernButton.ButtonScheme.Primary,
                 .Size = New Size(260, 36),
-                .Location = New Point(0, 412),
+                .Location = New Point(0, 110),
                 .Enabled = False
             }
-            AddHandler btnInitiateRestore.Click, AddressOf btnInitiateRestore_Click
+            AddHandler btnRestoreLatest.Click, AddressOf btnRestoreLatest_Click
 
-            pnlRestoreHost.Controls.Add(btnInitiateRestore)
-            pnlRestoreHost.Controls.Add(txtRestoreLog)
-            pnlRestoreHost.Controls.Add(lblRestoreValidationStatus)
-            pnlRestoreHost.Controls.Add(btnValidateRestoreFile)
-            pnlRestoreHost.Controls.Add(btnBrowseRestoreFile)
-            pnlRestoreHost.Controls.Add(txtRestorePath)
-            pnlRestoreHost.Controls.Add(lblPathHeader)
-            pnlRestoreHost.Controls.Add(lblWarnDesc)
-            pnlRestoreHost.Controls.Add(lblWarnHeader)
+            btnChooseAnother = New ModernButton() With {
+                .Text = "Choose Another Backup",
+                .Scheme = ModernButton.ButtonScheme.Secondary,
+                .Size = New Size(220, 36),
+                .Location = New Point(270, 110)
+            }
+            AddHandler btnChooseAnother.Click, AddressOf btnChooseAnother_Click
+
+            lblCustomBackupStatus = New Label() With {
+                .Text = "",
+                .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold),
+                .ForeColor = Color.FromArgb(3, 84, 63),
+                .Location = New Point(0, 160),
+                .AutoSize = True,
+                .Visible = False
+            }
+            
+            lblRestoreProgress = New Label() With {
+                .Text = "Restoring your office data..." & Environment.NewLine & "Please do not close the application.",
+                .Font = New Font(ThemeConstants.FontNameDefault, 11.0!, FontStyle.Bold),
+                .ForeColor = ThemeConstants.PrimaryAccent,
+                .Location = New Point(0, 200),
+                .AutoSize = True,
+                .Visible = False
+            }
+
+            pnlRestoreHost.Controls.Add(lblRestoreProgress)
+            pnlRestoreHost.Controls.Add(lblCustomBackupStatus)
+            pnlRestoreHost.Controls.Add(btnChooseAnother)
+            pnlRestoreHost.Controls.Add(btnRestoreLatest)
+            pnlRestoreHost.Controls.Add(lblLatestBackupDetails)
+            pnlRestoreHost.Controls.Add(lblRestoreDesc)
+            pnlRestoreHost.Controls.Add(lblRestoreTitle)
 
             tabRestore.Controls.Add(pnlRestoreHost)
         End Sub
@@ -582,6 +583,23 @@ Namespace Forms.Admin
                                 cardLastBackup.Scheme = AppKpiCard.KpiScheme.Critical
                                 cardLastBackup.Subtext = "Backup Overdue"
                             End If
+                            
+                            ' Update Restore Tab UI
+                            Dim lastVerified = history.FirstOrDefault(Function(h) h.Status = "Succeeded" AndAlso h.VerificationStatus IsNot Nothing AndAlso (h.VerificationStatus.Contains("Verified") OrElse h.VerificationStatus.Contains("Passed")))
+                            If lastVerified IsNot Nothing Then
+                                Dim mbSize As Double = CDbl(lastVerified.FileSizeBytes) / (1024.0 * 1024.0)
+                                lblLatestBackupDetails.Text = $"Latest Verified Backup" & Environment.NewLine & $"{lastVerified.StartedOn:dd MMM yyyy} · {lastVerified.StartedOn:hh:mm tt}" & Environment.NewLine & $"{mbSize:F2} MB" & Environment.NewLine & "✓ Verified"
+                                lblLatestBackupDetails.ForeColor = Color.FromArgb(3, 84, 63)
+                                _selectedBackupForRestore = lastVerified
+                                _isRestoreValidated = True
+                                btnRestoreLatest.Text = "Restore Latest Verified Backup"
+                                btnRestoreLatest.Enabled = True
+                            Else
+                                lblLatestBackupDetails.Text = "Latest Backup: Unverified"
+                                lblLatestBackupDetails.ForeColor = Color.FromArgb(185, 28, 28)
+                                _isRestoreValidated = False
+                                btnRestoreLatest.Enabled = False
+                            End If
                         Else
                             ' History exists, but no succeeded backup record -> Critical (Red)
                             cardLastBackup.Value = "None"
@@ -647,7 +665,7 @@ Namespace Forms.Admin
                     parentShell = TryCast(Me.Parent.FindForm(), FrmMainShell)
                 End If
                 If parentShell IsNot Nothing Then
-                    parentShell.NavigateToModule("Admin")
+                    parentShell.NavigateToModule("Settings")
                 Else
                     Me.Close()
                 End If
@@ -747,74 +765,68 @@ Namespace Forms.Admin
             End Try
         End Sub
 
-        Private Sub btnBrowseRestoreFile_Click(sender As Object, e As EventArgs)
+        Private Async Sub btnChooseAnother_Click(sender As Object, e As EventArgs)
             Using ofd As New OpenFileDialog()
-                ofd.Filter = "SQL Server Backup Files (*.bak)|*.bak|All Files (*.*)|*.*"
-                ofd.Title = "Select Database Backup Archive for Recovery"
+                ofd.Filter = "Backup Files (*.bak)|*.bak|All Files (*.*)|*.*"
+                ofd.Title = "Choose Another Backup"
                 If ofd.ShowDialog() = DialogResult.OK Then
-                    txtRestorePath.Text = ofd.FileName
-                    _isRestoreValidated = False
-                    btnInitiateRestore.Enabled = False
-                    lblRestoreValidationStatus.Text = "Validation Status: Selected file awaiting pre-restore header & hash check."
+                    Dim filePath = ofd.FileName
+                    Me.Cursor = Cursors.WaitCursor
+                    lblCustomBackupStatus.Visible = True
+                    lblCustomBackupStatus.Text = "Verifying selected backup..."
+                    lblCustomBackupStatus.ForeColor = ThemeConstants.TextSecondary
+                    btnRestoreLatest.Enabled = False
+
+                    Try
+                        ' 1. Verify Header
+                        Dim isVerifyOk = Await _backupService.VerifyBackupFileAsync(filePath)
+                        If Not isVerifyOk Then
+                            lblCustomBackupStatus.Text = "Invalid Backup: The file is corrupted or unreadable."
+                            lblCustomBackupStatus.ForeColor = Color.FromArgb(185, 28, 28)
+                            _isRestoreValidated = False
+                            Return
+                        End If
+
+                        ' 2. Verify SHA-256 Hash
+                        Dim history = Await _backupService.GetBackupHistoryAsync(100)
+                        Dim historyRecord = history.FirstOrDefault(Function(h) h.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase) OrElse h.FileName.Equals(Path.GetFileName(filePath), StringComparison.OrdinalIgnoreCase))
+                        
+                        If historyRecord IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(historyRecord.Sha256Hash) Then
+                            If Not DatabaseBackupService.VerifySha256TamperStatus(filePath, historyRecord.Sha256Hash) Then
+                                lblCustomBackupStatus.Text = "Invalid Backup: Verification failed."
+                                lblCustomBackupStatus.ForeColor = Color.FromArgb(185, 28, 28)
+                                _isRestoreValidated = False
+                                Return
+                            End If
+                        End If
+
+                        ' Passed validation
+                        _isRestoreValidated = True
+                        _selectedBackupForRestore = New DatabaseBackupHistoryDto() With {
+                            .FilePath = filePath,
+                            .StartedOn = File.GetCreationTime(filePath),
+                            .FileSizeBytes = New FileInfo(filePath).Length
+                        }
+                        
+                        Dim mbSize As Double = CDbl(_selectedBackupForRestore.FileSizeBytes) / (1024.0 * 1024.0)
+                        lblCustomBackupStatus.Text = $"Selected: {Path.GetFileName(filePath)} ({mbSize:F2} MB) - ✓ Verified"
+                        lblCustomBackupStatus.ForeColor = Color.FromArgb(3, 84, 63)
+                        
+                        btnRestoreLatest.Text = "Restore Selected Backup"
+                        btnRestoreLatest.Enabled = True
+                    Catch ex As Exception
+                        lblCustomBackupStatus.Text = "Invalid Backup: An error occurred during verification."
+                        lblCustomBackupStatus.ForeColor = Color.FromArgb(185, 28, 28)
+                        _isRestoreValidated = False
+                    Finally
+                        Me.Cursor = Cursors.Default
+                    End Try
                 End If
             End Using
         End Sub
 
-        Private Async Sub btnValidateRestoreFile_Click(sender As Object, e As EventArgs)
-            Dim filePath = txtRestorePath.Text.Trim()
-            If String.IsNullOrWhiteSpace(filePath) OrElse Not File.Exists(filePath) Then
-                AppNotificationHelper.ShowWarning("Please select a valid existing .bak backup file.", "File Required", Me)
-                Return
-            End If
-
-            Try
-                Me.Cursor = Cursors.WaitCursor
-                txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] Inspecting backup archive: {Path.GetFileName(filePath)}..." & Environment.NewLine)
-
-                ' 1. Verify RESTORE VERIFYONLY
-                Dim isVerifyOk = Await _backupService.VerifyBackupFileAsync(filePath)
-                If Not isVerifyOk Then
-                    txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] ERROR: RESTORE VERIFYONLY failed to read backup headers." & Environment.NewLine)
-                    lblRestoreValidationStatus.Text = "Validation Status: FAILED (Corrupt or unreadable header)."
-                    lblRestoreValidationStatus.ForeColor = Color.FromArgb(185, 28, 28)
-                    _isRestoreValidated = False
-                    btnInitiateRestore.Enabled = False
-                    Return
-                End If
-
-                txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] PASS: RESTORE VERIFYONLY header structure valid." & Environment.NewLine)
-
-                ' 2. Calculate SHA-256 hash & compare against database registry
-                Dim currentHash = DatabaseBackupService.CalculateSha256Hash(filePath)
-                txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] Current SHA-256 Hash: {currentHash}" & Environment.NewLine)
-
-                Dim history = Await _backupService.GetBackupHistoryAsync(100)
-                Dim historyRecord = history.FirstOrDefault(Function(h) h.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase) OrElse h.FileName.Equals(Path.GetFileName(filePath), StringComparison.OrdinalIgnoreCase))
-
-                If historyRecord IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(historyRecord.Sha256Hash) Then
-                    If Not DatabaseBackupService.VerifySha256TamperStatus(filePath, historyRecord.Sha256Hash) Then
-                        txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] CRITICAL ERROR: SHA-256 hash mismatch! Registered: {historyRecord.Sha256Hash}, Current: {currentHash}." & Environment.NewLine)
-                        txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] TAMPER WARNING: Backup archive has been modified or corrupted on disk." & Environment.NewLine)
-                        lblRestoreValidationStatus.Text = "Validation Status: REJECTED (SHA-256 Hash Mismatch / Tamper Detected)."
-                        lblRestoreValidationStatus.ForeColor = Color.FromArgb(185, 28, 28)
-                        _isRestoreValidated = False
-                        btnInitiateRestore.Enabled = False
-                        Return
-                    End If
-                    txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] PASS: SHA-256 hash integrity verified against database backup registry." & Environment.NewLine)
-                End If
-
-                _isRestoreValidated = True
-                btnInitiateRestore.Enabled = True
-                lblRestoreValidationStatus.Text = "Validation Status: PASSED. Backup file is structurally sound and ready for controlled restore."
-                lblRestoreValidationStatus.ForeColor = Color.FromArgb(3, 84, 63)
-            Finally
-                Me.Cursor = Cursors.Default
-            End Try
-        End Sub
-
-        Private Async Sub btnInitiateRestore_Click(sender As Object, e As EventArgs)
-            If Not _isRestoreValidated Then Return
+        Private Async Sub btnRestoreLatest_Click(sender As Object, e As EventArgs)
+            If Not _isRestoreValidated OrElse _selectedBackupForRestore Is Nothing Then Return
 
             Dim authz As Core.Security.IAuthorizationService = New BLL.Security.AuthorizationService()
             If Not authz.IsAuthorized(Core.Enums.UserRole.Admin) Then
@@ -822,41 +834,40 @@ Namespace Forms.Admin
                 Return
             End If
 
-            Dim confirmMsg = $"CRITICAL WARNING: DESTRUCTIVE DATABASE RESTORE OPERATION{Environment.NewLine}{Environment.NewLine}" &
-                             $"Restoring 'StaffAutomationDb' will replace all current live records with data from:{Environment.NewLine}" &
-                             $"{Path.GetFileName(txtRestorePath.Text)}{Environment.NewLine}{Environment.NewLine}" &
-                             $"An automatic emergency backup will be taken before restoration begins.{Environment.NewLine}{Environment.NewLine}" &
-                             $"Are you sure you want to proceed?"
+            Dim backupTimeStr = _selectedBackupForRestore.StartedOn.ToString("dd MMM yyyy, hh:mm tt")
+            Dim confirmMsg = $"This will replace the current office database with the selected backup.{Environment.NewLine}Any changes made after this backup was created may be lost.{Environment.NewLine}{Environment.NewLine}Selected Backup: {backupTimeStr}{Environment.NewLine}Status: Verified"
 
-            Dim res = FrmInAppAlert.ShowModal(Me, "CONFIRM DISASTER RESTORE", confirmMsg, AlertType.WarningAlert, actionText:="PROCEED WITH RESTORE", showCancel:=True, cancelText:="CANCEL")
+            Dim res = FrmInAppAlert.ShowModal(Me, "Restore Database?", confirmMsg, AlertType.WarningAlert, actionText:="Continue Restore", showCancel:=True, cancelText:="Cancel")
             If res = DialogResult.OK Then
                 Try
                     Me.Cursor = Cursors.WaitCursor
-                    txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] Initiating controlled restore preparation & emergency backup..." & Environment.NewLine)
+                    
+                    ' Update UI for progress
+                    btnRestoreLatest.Visible = False
+                    btnChooseAnother.Visible = False
+                    lblCustomBackupStatus.Visible = False
+                    lblRestoreProgress.Visible = True
 
-                    Dim restoreSuccess = Await _restorePreparationService.ExecuteControlledRestoreAsync(txtRestorePath.Text)
+                    Dim restoreSuccess = Await _restorePreparationService.ExecuteControlledRestoreAsync(_selectedBackupForRestore.FilePath)
 
                     If restoreSuccess Then
-                        txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] SUCCESS: Database restored cleanly. MULTI_USER state active." & Environment.NewLine)
-                        
-                        ' 1. Clear ADO.NET SQL Connection Pools to purge stale connections
                         Microsoft.Data.SqlClient.SqlConnection.ClearAllPools()
 
-                        ' 2. Require mandatory application restart for security and session state integrity
-                        Forms.Common.FrmInAppAlert.ShowModal(Me, "DATABASE RESTORE COMPLETE", $"Database restored successfully from backup archive.{Environment.NewLine}{Environment.NewLine}To ensure complete connection and session integrity, the application will now restart.", Forms.Common.AlertType.SuccessAlert, actionText:="RESTART APPLICATION NOW")
+                        Forms.Common.FrmInAppAlert.ShowModal(Me, "Restore Completed", $"Your office database has been successfully restored.", Forms.Common.AlertType.SuccessAlert, actionText:="Restart Application")
 
-                        ' 3. Execute Application Restart
                         Application.Restart()
                         Environment.Exit(0)
                     Else
-                        txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] ERROR: Database restore returned failure status." & Environment.NewLine)
-                        AppNotificationHelper.ShowError("Database restore returned failure status.", "Restore Failed", Me)
+                        AppNotificationHelper.ShowError("An error occurred while restoring the office database.", "Restore Failed", Me)
                     End If
                 Catch ex As Exception
-                    txtRestoreLog.AppendText($"[{DateTime.Now:HH:mm:ss}] ERROR: Restore aborted: {ex.Message}" & Environment.NewLine)
-                    AppNotificationHelper.ShowError($"Restore aborted: {ex.Message}", "Restore Failed", Me)
+                    AppNotificationHelper.ShowError($"An error occurred: {ex.Message}", "Restore Failed", Me)
                 Finally
                     Me.Cursor = Cursors.Default
+                    ' Reset UI on failure
+                    btnRestoreLatest.Visible = True
+                    btnChooseAnother.Visible = True
+                    lblRestoreProgress.Visible = False
                 End Try
             End If
         End Sub

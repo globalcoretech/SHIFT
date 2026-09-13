@@ -1,4 +1,6 @@
 Imports System
+Imports System.Threading
+Imports System.Runtime.InteropServices
 Imports System.Windows.Forms
 Imports StaffAutomation.WinForms.UIHelpers
 
@@ -7,8 +9,31 @@ Namespace StaffAutomation.WinForms
     ''' Main application entry point initializing WinForms visual styles and global exception handling.
     ''' </summary>
     Friend Module Program
+        <DllImport("user32.dll", SetLastError:=True, CharSet:=CharSet.Auto)>
+        Private Function PostMessage(hWnd As IntPtr, Msg As UInteger, wParam As IntPtr, lParam As IntPtr) As Boolean
+        End Function
+
+        <DllImport("user32.dll", SetLastError:=True, CharSet:=CharSet.Auto)>
+        Private Function RegisterWindowMessage(lpString As String) As UInteger
+        End Function
+
+        Private Const HWND_BROADCAST As Integer = &HFFFF
+        Private _wakeUpMessage As UInteger
+        Private _appMutex As Mutex
+
         <STAThread()>
         Sub Main()
+            _wakeUpMessage = RegisterWindowMessage("StaffAutomation_WakeUp_Signal")
+            
+            Dim createdNew As Boolean
+            _appMutex = New Mutex(True, "Global\CAOfficeWorkforceAutomation_Instance", createdNew)
+
+            If Not createdNew Then
+                ' Secondary instance detected. Signal the primary instance and exit immediately.
+                PostMessage(New IntPtr(HWND_BROADCAST), _wakeUpMessage, IntPtr.Zero, IntPtr.Zero)
+                Return
+            End If
+
             System.Windows.Forms.Application.EnableVisualStyles()
             System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(False)
 
@@ -27,6 +52,8 @@ Namespace StaffAutomation.WinForms
             Dim navigator As IViewNavigator = New ViewNavigator()
             Dim loginForm = Factory.CreateLoginForm(navigator)
             System.Windows.Forms.Application.Run(loginForm)
+
+            GC.KeepAlive(_appMutex)
         End Sub
 
         Private _isHandlingException As Boolean = False
@@ -53,19 +80,32 @@ Namespace StaffAutomation.WinForms
 
             Try
                 Dim correlationId = Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper()
+                Dim activeFormName = If(Application.OpenForms.Count > 0 AndAlso Application.OpenForms(Application.OpenForms.Count - 1) IsNot Nothing, Application.OpenForms(Application.OpenForms.Count - 1).GetType().Name, "UnknownForm")
+
+                Dim fullLogDump As String = $"========================================================================{Environment.NewLine}" &
+                                            $"[CRASH DUMP] Correlation ID: {correlationId} | Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}" &
+                                            $"Active Form: {activeFormName} | IsTerminating: {isTerminating}{Environment.NewLine}" &
+                                            $"Exception Type: {ex.GetType().FullName}{Environment.NewLine}" &
+                                            $"Message: {ex.Message}{Environment.NewLine}" &
+                                            $"StackTrace: {Environment.NewLine}{ex.StackTrace}{Environment.NewLine}" &
+                                            $"InnerException: {If(ex.InnerException IsNot Nothing, ex.InnerException.GetType().FullName & ": " & ex.InnerException.Message, "None")}{Environment.NewLine}" &
+                                            $"Inner StackTrace: {If(ex.InnerException IsNot Nothing, Environment.NewLine & ex.InnerException.StackTrace, "None")}{Environment.NewLine}" &
+                                            $"========================================================================"
+
+                System.Diagnostics.Debug.WriteLine(fullLogDump)
 
                 ' 1. Log structured crash details to AppLogger
                 Try
                     Dim config As Core.Configuration.IAppConfiguration = New DAL.Configuration.AppConfiguration()
                     Dim logger As Core.Logging.IAppLogger = New BLL.Logging.AppLogger(config)
-                    logger.LogFatal($"[CRASH] Correlation ID: {correlationId} - Unhandled exception caught.", "GlobalExceptionHandler", ex)
+                    logger.LogFatal(fullLogDump, "GlobalExceptionHandler", ex)
                 Catch
                     ' Secondary logging fallback
                     Try
                         Dim logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs")
                         If Not System.IO.Directory.Exists(logDir) Then System.IO.Directory.CreateDirectory(logDir)
                         Dim fatalLogPath = System.IO.Path.Combine(logDir, $"fatal-{DateTime.UtcNow:yyyy-MM-dd}.log")
-                        System.IO.File.AppendAllText(fatalLogPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss UTC}] [FATAL] [{correlationId}] {ex.GetType().FullName}: {ex.Message}{Environment.NewLine}{ex.StackTrace}{Environment.NewLine}")
+                        System.IO.File.AppendAllText(fatalLogPath, fullLogDump & Environment.NewLine)
                     Catch
                     End Try
                 End Try

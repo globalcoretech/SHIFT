@@ -240,10 +240,12 @@ Namespace Forms.Tasks
                 Me.Cursor = Cursors.WaitCursor
                 If _selectedTaskId = 0 Then
                     Await _taskService.CreateAndAssignTaskAsync(dto)
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     Me.DialogResult = DialogResult.OK
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Success", "Task created and assigned successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                 Else
                     Await _taskService.UpdateTaskAsync(dto)
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     Me.DialogResult = DialogResult.OK
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Success", "Task details updated successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                 End If
@@ -269,6 +271,7 @@ Namespace Forms.Tasks
                 Try
                     Me.Cursor = Cursors.WaitCursor
                     Await _taskService.CompleteTaskAsync(_selectedTaskId)
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Completed", "Task marked completed successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                     Await RefreshTaskGridAsync()
                     ClearFormInputs()
@@ -291,6 +294,7 @@ Namespace Forms.Tasks
                 Try
                     Me.Cursor = Cursors.WaitCursor
                     Await _taskService.SoftDeleteTaskAsync(_selectedTaskId)
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Deleted", "Task soft-deleted successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                     Await RefreshTaskGridAsync()
                     ClearFormInputs()

@@ -32,11 +32,12 @@ Namespace Forms.Common
         Private pnlFooter As Panel
         Private btnAction As Button
         Private btnSecondaryAction As Button
+        Private btnTertiaryAction As Button
         Private _currentAlertType As AlertType = AlertType.ErrorAlert
 
-        Public Sub New(title As String, message As String, type As AlertType, Optional actionText As String = "I UNDERSTAND — BACK TO TERMINAL", Optional showCancel As Boolean = False, Optional cancelText As String = "Cancel")
+        Public Sub New(title As String, message As String, type As AlertType, Optional actionText As String = "OK", Optional showCancel As Boolean = False, Optional cancelText As String = "Cancel", Optional showTertiary As Boolean = False, Optional tertiaryText As String = "")
             InitializeComponent()
-            ConfigureAlert(title, message, type, actionText, showCancel, cancelText)
+            ConfigureAlert(title, message, type, actionText, showCancel, cancelText, showTertiary, tertiaryText)
         End Sub
 
         Private Sub InitializeComponent()
@@ -49,6 +50,7 @@ Namespace Forms.Common
             Me.pnlFooter = New Panel()
             Me.btnAction = New Button()
             Me.btnSecondaryAction = New Button()
+            Me.btnTertiaryAction = New Button()
 
             Me.pnlHeader.SuspendLayout()
             Me.pnlBody.SuspendLayout()
@@ -61,7 +63,8 @@ Namespace Forms.Common
             Me.StartPosition = FormStartPosition.CenterParent
             Me.ShowInTaskbar = False
             Me.Size = New Size(520, 260)
-            Me.BackColor = ThemeConstants.CardBackground
+            Me.BackColor = Color.FromArgb(203, 213, 225)
+            Me.Padding = New Padding(1)
             Me.DoubleBuffered = True
 
             ' Header Panel (Dark Slate Slate #0F172A)
@@ -89,6 +92,7 @@ Namespace Forms.Common
             Me.pnlFooter.Padding = New Padding(16, 10, 16, 10)
             Me.pnlFooter.Controls.Add(Me.btnAction)
             Me.pnlFooter.Controls.Add(Me.btnSecondaryAction)
+            Me.pnlFooter.Controls.Add(Me.btnTertiaryAction)
 
             ' Main Action Button
             Me.btnAction.Dock = DockStyle.Right
@@ -109,6 +113,17 @@ Namespace Forms.Common
             Me.btnSecondaryAction.Cursor = Cursors.Hand
             Me.btnSecondaryAction.FlatAppearance.BorderSize = 0
             Me.btnSecondaryAction.Visible = False
+
+            ' Tertiary Action Button (Optional)
+            Me.btnTertiaryAction.Dock = DockStyle.Right
+            Me.btnTertiaryAction.Size = New Size(110, 38)
+            Me.btnTertiaryAction.FlatStyle = FlatStyle.Flat
+            Me.btnTertiaryAction.Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold)
+            Me.btnTertiaryAction.ForeColor = Color.White
+            Me.btnTertiaryAction.BackColor = ThemeConstants.WarningOrange
+            Me.btnTertiaryAction.Cursor = Cursors.Hand
+            Me.btnTertiaryAction.FlatAppearance.BorderSize = 0
+            Me.btnTertiaryAction.Visible = False
 
             ' Body Panel
             Me.pnlBody.Dock = DockStyle.Fill
@@ -142,10 +157,11 @@ Namespace Forms.Common
             ' Wire Handlers
             AddHandler Me.btnAction.Click, AddressOf BtnAction_Click
             AddHandler Me.btnSecondaryAction.Click, AddressOf BtnSecondaryAction_Click
+            AddHandler Me.btnTertiaryAction.Click, AddressOf BtnTertiaryAction_Click
             AddHandler Me.picIcon.Paint, AddressOf PicIcon_Paint
         End Sub
 
-        Private Sub ConfigureAlert(title As String, message As String, type As AlertType, actionText As String, showCancel As Boolean, cancelText As String)
+        Private Sub ConfigureAlert(title As String, message As String, type As AlertType, actionText As String, showCancel As Boolean, cancelText As String, showTertiary As Boolean, tertiaryText As String)
             Me._currentAlertType = type
             Me.lblTitle.Text = title
             Me.lblMessage.Text = message
@@ -173,6 +189,12 @@ Namespace Forms.Common
                 Me.btnSecondaryAction.Text = cancelText
                 Me.btnSecondaryAction.Visible = True
                 Me.btnAction.Margin = New Padding(8, 0, 0, 0)
+            End If
+
+            If showTertiary Then
+                Me.btnTertiaryAction.Text = tertiaryText
+                Me.btnTertiaryAction.Visible = True
+                Me.btnSecondaryAction.Margin = New Padding(8, 0, 0, 0)
             End If
 
             Me.picIcon.Invalidate()
@@ -244,21 +266,6 @@ Namespace Forms.Common
             End Select
         End Sub
 
-        Protected Overrides ReadOnly Property CreateParams As CreateParams
-            Get
-                Dim cp = MyBase.CreateParams
-                cp.ClassStyle = cp.ClassStyle Or &H20000 ' CS_DROPSHADOW for native 3D drop shadow
-                Return cp
-            End Get
-        End Property
-
-        Protected Overrides Sub OnPaint(e As PaintEventArgs)
-            MyBase.OnPaint(e)
-            ' Draw clean 1px border around Form boundary
-            Using p As New Pen(Color.FromArgb(203, 213, 225), 1)
-                e.Graphics.DrawRectangle(p, 0, 0, Me.Width - 1, Me.Height - 1)
-            End Using
-        End Sub
 
         Private Sub BtnAction_Click(sender As Object, e As EventArgs)
             Me.DialogResult = DialogResult.OK
@@ -270,11 +277,19 @@ Namespace Forms.Common
             Me.Close()
         End Sub
 
+        Private Sub BtnTertiaryAction_Click(sender As Object, e As EventArgs)
+            Me.DialogResult = DialogResult.Retry
+            Me.Close()
+        End Sub
+
         ''' <summary>
         ''' Displays custom in-app themed alert dialog with vector icons, native DWM drop shadow,
         ''' and modern backdrop dimming overlay over specified parent window.
         ''' </summary>
-        Public Shared Function ShowModal(owner As Form, title As String, message As String, Optional type As AlertType = AlertType.ErrorAlert, Optional actionText As String = "I UNDERSTAND — BACK TO TERMINAL", Optional showCancel As Boolean = False, Optional cancelText As String = "Cancel") As DialogResult
+        Public Shared Function ShowModal(owner As Form, title As String, message As String, Optional type As AlertType = AlertType.ErrorAlert, Optional actionText As String = "OK", Optional showCancel As Boolean = False, Optional cancelText As String = "Cancel", Optional showTertiary As Boolean = False, Optional tertiaryText As String = "") As DialogResult
+            If owner IsNot Nothing Then
+                owner.Update()
+            End If
             Dim overlay As Form = Nothing
             Try
                 If owner IsNot Nothing AndAlso owner.Visible AndAlso owner.WindowState <> FormWindowState.Minimized Then
@@ -287,9 +302,10 @@ Namespace Forms.Common
                         .Bounds = owner.Bounds
                     }
                     overlay.Show(owner)
+                    overlay.Refresh()
                 End If
 
-                Using dlg As New FrmInAppAlert(title, message, type, actionText, showCancel, cancelText)
+                Using dlg As New FrmInAppAlert(title, message, type, actionText, showCancel, cancelText, showTertiary, tertiaryText)
                     Dim res = dlg.ShowDialog(If(overlay, owner))
                     Return res
                 End Using

@@ -8,6 +8,7 @@ Imports System.Drawing.Drawing2D
 Imports System.Linq
 Imports System.Threading.Tasks
 Imports System.Windows.Forms
+Imports StaffAutomation.BLL.Interfaces
 Imports StaffAutomation.BLL.Logging
 Imports StaffAutomation.BLL.Services
 Imports StaffAutomation.Core.Configuration
@@ -21,6 +22,7 @@ Imports StaffAutomation.Core.Security
 Imports StaffAutomation.DAL.Configuration
 Imports StaffAutomation.DAL.Core
 Imports StaffAutomation.DAL.Repositories
+Imports StaffAutomation.Core.Workflow
 Imports StaffAutomation.WinForms.Forms.Main
 
 Namespace Forms.Tasks
@@ -31,6 +33,7 @@ Namespace Forms.Tasks
     ''' </summary>
     Public Class DailyTasksControl
         Inherits UserControl
+        Implements IPreloadableScreen
 
         ' Services & Repositories
         Private ReadOnly _taskService As ITaskManagementService
@@ -38,6 +41,8 @@ Namespace Forms.Tasks
         Private ReadOnly _userRepo As DAL.Interfaces.IUserRepository
         Private ReadOnly _activityRepo As DAL.Interfaces.ITaskActivityRepository
         Private ReadOnly _discussionService As IDiscussionService
+        Private ReadOnly _attendanceService As IAttendanceService
+        Private _activeNavigationToken As Long = 0
         Private ReadOnly _appLogger As IAppLogger
         Private ReadOnly _auditLogger As AuditLogger
         Private ReadOnly _mainShellHost As Forms.Main.FrmMainShell
@@ -50,6 +55,53 @@ Namespace Forms.Tasks
         Private _activePresetFilter As String = ""
         Private _isUpcomingExpanded As Boolean = False
         Private _isOperationRunning As Boolean = False
+
+        ' Initialization & Clearing Lifecycle Guards, Debouncing & Version Sequencing
+        Private _isInitializingFilters As Boolean = True
+        Private _isClearingFilters As Boolean = False
+        Private _filterVersionSequence As Long = 0
+        Private ReadOnly _searchDebounceTimer As New System.Windows.Forms.Timer() With {.Interval = 400}
+
+        ' Controlled DB Exception Error State & Load Lock
+        Private _isDataLoading As Boolean = False
+        Private _hasDataLoadError As Boolean = False
+        Private _dataLoadErrorRefId As String = String.Empty
+
+        ' Request ID Sequence Tracking & Cache Freshness Policy
+        Private _dbFetchRequestCounter As Long = 0
+        Private _localTasksDataVersion As Long = 0
+
+        ''' <summary>
+        ''' Strongly-typed filter option wrapper for ComboBox items.
+        ''' Eliminates error-prone string parsing and preserves type safety.
+        ''' </summary>
+        Public Class FilterOption(Of T)
+            Public Property DisplayText As String = String.Empty
+            Public Property Value As T
+
+            Public Sub New(display As String, val As T)
+                Me.DisplayText = display
+                Me.Value = val
+            End Sub
+
+            Public Overrides Function ToString() As String
+                Return DisplayText
+            End Function
+        End Class
+
+        ''' <summary>
+        ''' Explicit Status Filter Kinds mapping UI options to domain state predicates.
+        ''' </summary>
+        Public Enum StatusFilterKind
+            AllStatus = 0
+            Pending = 1          ' Explicitly maps to NewTask OR Assigned
+            InProgress = 2       ' Maps to InProgress
+            WaitingForClient = 3 ' Maps to WaitingForClient
+            WaitingForDocuments = 4 ' Maps to WaitingForDocuments
+            UnderReview = 5      ' Maps to UnderReview
+            OnHold = 6           ' Maps to OnHold
+            Completed = 7        ' Maps to Completed
+        End Enum
 
         ' Task Checklist Persistence State Cache (TaskId -> List of (StepText, IsCompleted))
         Private ReadOnly _taskChecklistCache As New Dictionary(Of Integer, List(Of ChecklistStepItem))()
@@ -71,6 +123,7 @@ Namespace Forms.Tasks
         Private btnTabMyTasks As Button
         Private btnTabAllActive As Button
         Private btnTabCompleted As Button
+        Private btnTabDeletedTasks As Button
 
         ' Filter Bar Controls
         Private pnlFilterBar As Panel
@@ -117,6 +170,10 @@ Namespace Forms.Tasks
         Private lblEmptyStateSubtitle As Label
         Private btnEmptyStateClearFilters As Forms.Common.ModernButton
         Private lblPaginationPages As Label
+
+        ' Attendance Gate Controls
+        Private pnlAttendanceGate As Panel
+        Private lblAttendanceMessage As Label
 
         ' Right Column — Task Details Sidebar
         Private pnlTaskDetailsSidebar As Panel
@@ -194,19 +251,39 @@ Namespace Forms.Tasks
             Dim discussionRepo As DAL.Interfaces.IDiscussionRepository = New DiscussionRepository(sqlHelper)
             _activityRepo = New TaskActivityRepository(sqlHelper)
             _userRepo = New UserRepository(sqlHelper)
+            Dim attendanceRepo As DAL.Interfaces.IAttendanceRepository = New AttendanceRepository(sqlHelper)
             Dim workflowEngine As ITaskWorkflowEngine = New TaskWorkflowEngine()
 
-            _taskService = New TaskManagementService(taskRepo, workflowEngine, _appLogger, _auditLogger, clientRepo, _userRepo, _activityRepo, connFactory)
             _clientService = New ClientService(clientRepo, _appLogger, _auditLogger)
             _discussionService = New DiscussionService(discussionRepo, taskRepo, _appLogger, _auditLogger)
+            _attendanceService = New AttendanceService(attendanceRepo, _userRepo, _appLogger, _auditLogger, Nothing)
+            _taskService = New TaskManagementService(taskRepo, workflowEngine, _appLogger, _auditLogger, clientRepo, _userRepo, _activityRepo, connFactory)
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
 
-            InitializeComponent()
+            _isInitializingFilters = True
+            Try
+                InitializeComponent()
+            Finally
+                _isInitializingFilters = False
+            End Try
+
+            ' Execute startup assertions for dependencies and UI controls
+            ValidateDependenciesInitialized()
+            ValidateUiControlsInitialized()
+
+            AddHandler _searchDebounceTimer.Tick, AddressOf OnSearchDebounceTimer_Tick
+
+            Forms.Main.ThemeConstants.EnableDoubleBuffering(pnlWorkQueueHost)
+            Forms.Main.ThemeConstants.EnableDoubleBuffering(pnlQueueContentScroll)
+            Forms.Main.ThemeConstants.EnableDoubleBuffering(pnlTaskDetailsSidebar)
         End Sub
 
-        Protected Overrides Async Sub OnLoad(e As EventArgs)
+        Protected Overrides Sub OnLoad(e As EventArgs)
             MyBase.OnLoad(e)
             SetSearchPlaceholder()
-            Await LoadInitialDataAsync()
+            CheckAttendanceGateAsync()
         End Sub
 
         Public Sub ApplyFilterPreset(filterPreset As String)
@@ -241,16 +318,69 @@ Namespace Forms.Tasks
             End Select
         End Sub
 
-        Protected Overrides Async Sub OnVisibleChanged(e As EventArgs)
+        Private _isDataLoaded As Boolean = False
+
+        Protected Overrides Sub OnVisibleChanged(e As EventArgs)
             MyBase.OnVisibleChanged(e)
-            If Me.Visible AndAlso Not Me.DesignMode Then
-                Await LoadInitialDataAsync()
+            If Me.Visible Then
+                CheckAttendanceGateAsync()
             End If
+            ' Data loading is exclusively managed by PreloadDataAsync via NavigationService contract.
+            ' OnVisibleChanged performs visual layout adjustments only.
         End Sub
 
         Private Sub SetSearchPlaceholder()
             If txtSearch IsNot Nothing AndAlso txtSearch.IsHandleCreated Then
                 SendMessage(txtSearch.Handle, EM_SETCUEBANNER, New IntPtr(1), "Search tasks, client, GSTIN...")
+            End If
+        End Sub
+
+        Private Async Sub CheckAttendanceGateAsync()
+            If CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser.Role = UserRole.Employee Then
+                Dim todayRec = Await _attendanceService.GetTodayAttendanceForUserAsync(CurrentUserContext.CurrentUser.UserId)
+                
+                Dim isGated As Boolean = False
+                Dim gateMsg As String = ""
+                
+                If todayRec Is Nothing Then
+                    isGated = True
+                    gateMsg = "Punch in to see your tasks"
+                ElseIf todayRec.ClockOutTime.HasValue Then
+                    isGated = True
+                    gateMsg = "Your shift has ended for today"
+                ElseIf todayRec.BreakStartTime.HasValue Then
+                    isGated = True
+                    gateMsg = "You're on lunch — resume work to continue"
+                End If
+                
+                If isGated Then
+                    lblAttendanceMessage.Text = gateMsg
+                    lblAttendanceMessage.Location = New Point((pnlAttendanceGate.Width - lblAttendanceMessage.Width) \ 2, (pnlAttendanceGate.Height - lblAttendanceMessage.Height) \ 2)
+                    pnlAttendanceGate.Visible = True
+                    pnlAttendanceGate.BringToFront()
+                    
+                    ' Disable action buttons
+                    If btnCreateTask IsNot Nothing Then btnCreateTask.Enabled = False
+                    If btnAcceptTask IsNot Nothing Then btnAcceptTask.Enabled = False
+                    If btnEditTask IsNot Nothing Then btnEditTask.Enabled = False
+                    If btnDeleteTask IsNot Nothing Then btnDeleteTask.Enabled = False
+                    If btnOpenWorkflow IsNot Nothing Then btnOpenWorkflow.Enabled = False
+                    If btnMarkComplete IsNot Nothing Then btnMarkComplete.Enabled = False
+                    If btnReassign IsNot Nothing Then btnReassign.Enabled = False
+                Else
+                    pnlAttendanceGate.Visible = False
+                    If btnCreateTask IsNot Nothing Then btnCreateTask.Enabled = True
+                    If btnAcceptTask IsNot Nothing Then btnAcceptTask.Enabled = True
+                    If btnEditTask IsNot Nothing Then btnEditTask.Enabled = True
+                    If btnDeleteTask IsNot Nothing Then btnDeleteTask.Enabled = True
+                    If btnOpenWorkflow IsNot Nothing Then btnOpenWorkflow.Enabled = True
+                    If btnMarkComplete IsNot Nothing Then btnMarkComplete.Enabled = True
+                    If btnReassign IsNot Nothing Then btnReassign.Enabled = True
+                End If
+            Else
+                If pnlAttendanceGate IsNot Nothing Then
+                    pnlAttendanceGate.Visible = False
+                End If
             End If
         End Sub
 
@@ -267,7 +397,7 @@ Namespace Forms.Tasks
             pnlHeader = New Panel() With {
                 .Dock = DockStyle.Top,
                 .Height = 78,
-                .BackColor = Color.Transparent
+                .BackColor = ThemeConstants.PearlHeaderBackground
             }
 
             lblTitle = New Label() With {
@@ -291,7 +421,8 @@ Namespace Forms.Tasks
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Primary,
                 .Size = New Size(140, 36),
                 .Location = New Point(pnlHeader.Width - 140, 0),
-                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right,
+                .Visible = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role <> UserRole.Employee, True)
             }
             AddHandler btnCreateTask.Click, AddressOf btnCreateTask_Click
 
@@ -306,12 +437,19 @@ Namespace Forms.Tasks
             btnTabMyTasks = CreateTabButton("My Tasks (0)", False, 155)
             btnTabAllActive = CreateTabButton("All Active (0)", False, 280)
             btnTabCompleted = CreateTabButton("Completed", False, 400)
+            
+            Dim currentRole As UserRole = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role, UserRole.Employee)
+            If currentRole = UserRole.Admin OrElse currentRole = UserRole.Owner Then
+                btnTabDeletedTasks = CreateTabButton("Deleted Tasks", False, 520)
+                AddHandler btnTabDeletedTasks.Click, Sub(s, e) SwitchActiveTab("DeletedTasks")
+            End If
 
             AddHandler btnTabNeedsAttention.Click, Sub(s, e) SwitchActiveTab("NeedsAttention")
             AddHandler btnTabMyTasks.Click, Sub(s, e) SwitchActiveTab("MyTasks")
             AddHandler btnTabAllActive.Click, Sub(s, e) SwitchActiveTab("AllActive")
             AddHandler btnTabCompleted.Click, Sub(s, e) SwitchActiveTab("Completed")
 
+            If btnTabDeletedTasks IsNot Nothing Then pnlTabsContainer.Controls.Add(btnTabDeletedTasks)
             pnlTabsContainer.Controls.Add(btnTabCompleted)
             pnlTabsContainer.Controls.Add(btnTabAllActive)
             pnlTabsContainer.Controls.Add(btnTabMyTasks)
@@ -342,70 +480,92 @@ Namespace Forms.Tasks
 
             txtSearch = New Krypton.Toolkit.KryptonTextBox() With {
                 .Location = New Point(10, 9),
-                .Size = New Size(195, 24),
+                .Size = New Size(175, 24),
                 .TabIndex = 0
             }
             ThemeConstants.ApplyAppTextBoxStyle(txtSearch)
             AddHandler txtSearch.HandleCreated, Sub(s, e) SetSearchPlaceholder()
-            AddHandler txtSearch.TextChanged, AddressOf OnFilterChanged
+            AddHandler txtSearch.TextChanged, AddressOf OnSearchTextChanged
 
             cboStatusFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(211, 9),
-                .Size = New Size(130, 24),
+                .Location = New Point(191, 9),
+                .Size = New Size(115, 24),
                 .TabIndex = 1
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboStatusFilter)
-            cboStatusFilter.Items.AddRange(New Object() {"All Status", "Pending", "In Progress", "Waiting for Client", "Waiting for Documents", "Under Review", "On Hold"})
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("All Status", StatusFilterKind.AllStatus))
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("Pending", StatusFilterKind.Pending))
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("In Progress", StatusFilterKind.InProgress))
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("Waiting for Client", StatusFilterKind.WaitingForClient))
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("Waiting for Documents", StatusFilterKind.WaitingForDocuments))
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("Under Review", StatusFilterKind.UnderReview))
+            cboStatusFilter.Items.Add(New FilterOption(Of StatusFilterKind)("On Hold", StatusFilterKind.OnHold))
             cboStatusFilter.SelectedIndex = 0
             AddHandler cboStatusFilter.SelectedIndexChanged, AddressOf OnFilterChanged
 
             cboStaffFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(347, 9),
-                .Size = New Size(115, 24),
+                .Location = New Point(312, 9),
+                .Size = New Size(105, 24),
                 .TabIndex = 2
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboStaffFilter)
-            cboStaffFilter.Items.Add("All Staff")
+            cboStaffFilter.Items.Add(New FilterOption(Of String)("All Staff", "all"))
             cboStaffFilter.SelectedIndex = 0
             AddHandler cboStaffFilter.SelectedIndexChanged, AddressOf OnFilterChanged
 
             cboPriorityFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(468, 9),
-                .Size = New Size(105, 24),
+                .Location = New Point(423, 9),
+                .Size = New Size(95, 24),
                 .TabIndex = 3
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboPriorityFilter)
-            cboPriorityFilter.Items.AddRange(New Object() {"All Priority", "Critical", "High", "Medium", "Low"})
+            cboPriorityFilter.Items.Add(New FilterOption(Of Nullable(Of TaskPriority))("All Priority", Nothing))
+            cboPriorityFilter.Items.Add(New FilterOption(Of Nullable(Of TaskPriority))("Critical", TaskPriority.Urgent))
+            cboPriorityFilter.Items.Add(New FilterOption(Of Nullable(Of TaskPriority))("High", TaskPriority.High))
+            cboPriorityFilter.Items.Add(New FilterOption(Of Nullable(Of TaskPriority))("Medium", TaskPriority.Medium))
+            cboPriorityFilter.Items.Add(New FilterOption(Of Nullable(Of TaskPriority))("Low", TaskPriority.Low))
             cboPriorityFilter.SelectedIndex = 0
             AddHandler cboPriorityFilter.SelectedIndexChanged, AddressOf OnFilterChanged
 
             cboTaskTypeFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(579, 9),
-                .Size = New Size(130, 24),
+                .Location = New Point(524, 9),
+                .Size = New Size(115, 24),
                 .TabIndex = 4
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboTaskTypeFilter)
-            cboTaskTypeFilter.Items.AddRange(New Object() {"All Task Types", "GST Compliance", "Income Tax", "TDS Returns", "ROC / MCA", "Accounting", "Audit", "Client Onboarding", "Other"})
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("All Task Types", "all"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("GST Compliance", "GST Compliance"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("Income Tax", "Income Tax"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("TDS Returns", "TDS Returns"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("ROC / MCA", "ROC / MCA"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("Accounting", "Accounting"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("Audit", "Audit"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("Client Onboarding", "Client Onboarding"))
+            cboTaskTypeFilter.Items.Add(New FilterOption(Of String)("Other", "Other"))
             cboTaskTypeFilter.SelectedIndex = 0
             AddHandler cboTaskTypeFilter.SelectedIndexChanged, AddressOf OnFilterChanged
 
             cboDueDateFilter = New Krypton.Toolkit.KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(715, 9),
-                .Size = New Size(115, 24),
+                .Location = New Point(645, 9),
+                .Size = New Size(105, 24),
                 .TabIndex = 5
             }
             ThemeConstants.ApplyAppComboBoxStyle(cboDueDateFilter)
-            cboDueDateFilter.Items.AddRange(New Object() {"All Due Dates", "Overdue", "Due Today", "Due This Week", "Due This Month"})
+            cboDueDateFilter.Items.Add(New FilterOption(Of String)("All Due Dates", "all"))
+            cboDueDateFilter.Items.Add(New FilterOption(Of String)("Overdue", "overdue"))
+            cboDueDateFilter.Items.Add(New FilterOption(Of String)("Due Today", "duetoday"))
+            cboDueDateFilter.Items.Add(New FilterOption(Of String)("Due This Week", "dueweek"))
+            cboDueDateFilter.Items.Add(New FilterOption(Of String)("Due This Month", "duemonth"))
             cboDueDateFilter.SelectedIndex = 0
             AddHandler cboDueDateFilter.SelectedIndexChanged, AddressOf OnFilterChanged
 
             btnClearFilters = New Forms.Common.ModernButton() With {
-                .Text = "↺ Clear",
+                .Text = "Clear",
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Secondary,
                 .Size = New Size(70, 26),
                 .Location = New Point(pnlFilterBar.Width - 80, 8),
@@ -611,9 +771,9 @@ Namespace Forms.Tasks
             ' Metadata Table Layout
             pnlMetaGrid = New TableLayoutPanel() With {
                 .Location = New Point(0, 72),
-                .Size = New Size(320, 130),
+                .Size = New Size(320, 185),
                 .ColumnCount = 2,
-                .RowCount = 5,
+                .RowCount = 7,
                 .BackColor = Color.FromArgb(248, 250, 252)
             }
             pnlMetaGrid.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 45.0!))
@@ -624,6 +784,8 @@ Namespace Forms.Tasks
             lblMetaDueDateVal = AddMetaGridRow(pnlMetaGrid, 2, "Due Date:", "Due Today (19 Aug)")
             lblMetaAssigneeVal = AddMetaGridRow(pnlMetaGrid, 3, "Assigned To:", "Priya Shah")
             lblMetaStatusVal = AddMetaGridRow(pnlMetaGrid, 4, "Status:", "Pending")
+            lblMetaCreatedOnVal = AddMetaGridRow(pnlMetaGrid, 5, "Created On:", "—")
+            lblMetaCreatedByVal = AddMetaGridRow(pnlMetaGrid, 6, "Created By:", "—")
 
             ' NEXT ACTION Box
             pnlNextActionBox = New Panel() With {
@@ -753,11 +915,15 @@ Namespace Forms.Tasks
             }
             AddHandler btnAcceptTask.Click, AddressOf btnAcceptTask_Click
 
+            currentRole = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role, UserRole.Employee)
+            Dim isEmployee = currentRole = UserRole.Employee
+
             btnEditTask = New Forms.Common.ModernButton() With {
                 .Text = "✏ Edit Task",
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Secondary,
                 .Size = New Size(150, 32),
-                .Location = New Point(0, 4)
+                .Location = New Point(0, 4),
+                .Visible = Not isEmployee
             }
             AddHandler btnEditTask.Click, AddressOf btnEditTask_Click
 
@@ -767,7 +933,8 @@ Namespace Forms.Tasks
                 .BackColor = Color.FromArgb(239, 68, 68),
                 .ForeColor = Color.White,
                 .Size = New Size(150, 32),
-                .Location = New Point(158, 4)
+                .Location = New Point(158, 4),
+                .Visible = Not isEmployee
             }
             AddHandler btnDeleteTask.Click, AddressOf btnDeleteTask_Click
 
@@ -780,7 +947,7 @@ Namespace Forms.Tasks
             AddHandler btnOpenWorkflow.Click, AddressOf btnOpenWorkflow_Click
 
             btnMarkComplete = New Forms.Common.ModernButton() With {
-                .Text = "✓ Mark as Complete",
+                .Text = If(isEmployee, "✓ Submit for Review", "✓ Mark as Complete"),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Custom,
                 .BackColor = Color.FromArgb(16, 185, 129),
                 .ForeColor = Color.White,
@@ -813,12 +980,96 @@ Namespace Forms.Tasks
             ' Context Menu
             InitializeRowContextMenu()
 
-            ' Final Container Assembly
+            ' Attendance Gate Initialization
+            pnlAttendanceGate = New Panel() With {
+                .Dock = DockStyle.Fill,
+                .BackColor = Color.FromArgb(240, Color.White),
+                .Visible = False
+            }
+            lblAttendanceMessage = New Label() With {
+                .Text = "Punch in to see your tasks",
+                .Font = New Font(ThemeConstants.FontNameDefault, 14.0!, FontStyle.Bold),
+                .ForeColor = ThemeConstants.TextPrimary,
+                .AutoSize = True,
+                .TextAlign = ContentAlignment.MiddleCenter
+            }
+            pnlAttendanceGate.Controls.Add(lblAttendanceMessage)
+            AddHandler pnlAttendanceGate.Resize, Sub(s, e)
+                                                     lblAttendanceMessage.Location = New Point((pnlAttendanceGate.Width - lblAttendanceMessage.Width) \ 2, (pnlAttendanceGate.Height - lblAttendanceMessage.Height) \ 2)
+                                                 End Sub
+
+            Me.Controls.Add(pnlAttendanceGate)
             Me.Controls.Add(scMainSplit)
             Me.Controls.Add(pnlFilterBar)
             Me.Controls.Add(pnlHeader)
 
             Me.ResumeLayout(False)
+
+            ' Debug Assertion: Validate that all declared UI controls are properly instantiated
+            ValidateUiControlsInitialized()
+        End Sub
+
+        ''' <summary>
+        ''' Debug assertion validator verifying that all declared UI controls are properly instantiated.
+        ''' Throws InvalidOperationException if any required control is Nothing.
+        ''' </summary>
+        Private Sub ValidateDependenciesInitialized()
+            Dim missingDeps As New List(Of String)()
+
+            If _taskService Is Nothing Then missingDeps.Add("_taskService")
+            If _clientService Is Nothing Then missingDeps.Add("_clientService")
+            If _userRepo Is Nothing Then missingDeps.Add("_userRepo")
+            If _activityRepo Is Nothing Then missingDeps.Add("_activityRepo")
+            If _discussionService Is Nothing Then missingDeps.Add("_discussionService")
+            If _appLogger Is Nothing Then missingDeps.Add("_appLogger")
+            If _auditLogger Is Nothing Then missingDeps.Add("_auditLogger")
+
+            If missingDeps.Count > 0 Then
+                Dim errList As String = String.Join(", ", missingDeps)
+                If _appLogger IsNot Nothing Then
+                    _appLogger.LogError($"[DependencyError] Service dependency initialization check failed! Missing dependencies: {errList}", "DailyTasksControl")
+                End If
+#If DEBUG Then
+                Throw New InvalidOperationException($"[DEBUG FAIL-FAST] DailyTasksControl dependency initialization incomplete. Missing: {errList}")
+#End If
+            End If
+        End Sub
+
+        Private Sub ValidateUiControlsInitialized()
+            Dim missingControls As New List(Of String)()
+
+            If pnlHeader Is Nothing Then missingControls.Add("pnlHeader")
+            If pnlFilterBar Is Nothing Then missingControls.Add("pnlFilterBar")
+            If txtSearch Is Nothing Then missingControls.Add("txtSearch")
+            If cboStatusFilter Is Nothing Then missingControls.Add("cboStatusFilter")
+            If cboStaffFilter Is Nothing Then missingControls.Add("cboStaffFilter")
+            If cboPriorityFilter Is Nothing Then missingControls.Add("cboPriorityFilter")
+            If cboTaskTypeFilter Is Nothing Then missingControls.Add("cboTaskTypeFilter")
+            If cboDueDateFilter Is Nothing Then missingControls.Add("cboDueDateFilter")
+            If btnClearFilters Is Nothing Then missingControls.Add("btnClearFilters")
+            If scMainSplit Is Nothing Then missingControls.Add("scMainSplit")
+            If pnlWorkQueueHost Is Nothing Then missingControls.Add("pnlWorkQueueHost")
+            If pnlTaskDetailsSidebar Is Nothing Then missingControls.Add("pnlTaskDetailsSidebar")
+            If pnlMetaGrid Is Nothing Then missingControls.Add("pnlMetaGrid")
+            If lblMetaClientVal Is Nothing Then missingControls.Add("lblMetaClientVal")
+            If lblMetaGstinVal Is Nothing Then missingControls.Add("lblMetaGstinVal")
+            If lblMetaDueDateVal Is Nothing Then missingControls.Add("lblMetaDueDateVal")
+            If lblMetaAssigneeVal Is Nothing Then missingControls.Add("lblMetaAssigneeVal")
+            If lblMetaStatusVal Is Nothing Then missingControls.Add("lblMetaStatusVal")
+            If lblMetaCreatedOnVal Is Nothing Then missingControls.Add("lblMetaCreatedOnVal")
+            If lblMetaCreatedByVal Is Nothing Then missingControls.Add("lblMetaCreatedByVal")
+            If pnlChecklistHost Is Nothing Then missingControls.Add("pnlChecklistHost")
+            If lblNotesHeader Is Nothing Then missingControls.Add("lblNotesHeader")
+
+            If missingControls.Count > 0 Then
+                Dim errList As String = String.Join(", ", missingControls)
+                If _appLogger IsNot Nothing Then
+                    _appLogger.LogError($"[TaskUiError] UI Initialization Check Failed! Missing controls: {errList}", "DailyTasksControl")
+                End If
+#If DEBUG Then
+                Throw New InvalidOperationException($"[DEBUG FAIL-FAST] DailyTasksControl UI initialization incomplete. Missing controls: {errList}")
+#End If
+            End If
         End Sub
 
         ' Helper to build urgent section header panel
@@ -950,13 +1201,22 @@ Namespace Forms.Tasks
 
         Private Sub InitializeRowContextMenu()
             ctxRowMenu = New ContextMenuStrip()
+            Dim currentRole As UserRole = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role, UserRole.Employee)
+            Dim isEmployee = currentRole = UserRole.Employee
+
             Dim itemAccept As New ToolStripMenuItem("✓ Accept Task", Nothing, AddressOf btnAcceptTask_Click)
             Dim itemEdit As New ToolStripMenuItem("✏️ Edit Task", Nothing, AddressOf btnEditTask_Click)
+            itemEdit.Visible = Not isEmployee
             Dim itemDelete As New ToolStripMenuItem("🗑️ Soft Delete Task", Nothing, AddressOf btnDeleteTask_Click)
+            itemDelete.Visible = Not isEmployee
             Dim itemOpen As New ToolStripMenuItem("➔ Open Task / Workflow", Nothing, AddressOf btnOpenWorkflow_Click)
             Dim itemReassign As New ToolStripMenuItem("👤 Reassign Staff", Nothing, Sub(s, e) PromptReassignTask())
             Dim itemPriority As New ToolStripMenuItem("⚡ Change Priority", Nothing, Sub(s, e) PromptChangePriority())
-            Dim itemComplete As New ToolStripMenuItem("✓ Mark as Complete", Nothing, AddressOf btnMarkComplete_Click)
+            Dim itemComplete As New ToolStripMenuItem(If(isEmployee, "✓ Submit for Review", "✓ Mark as Complete"), Nothing, AddressOf btnMarkComplete_Click)
+            Dim itemRestore As New ToolStripMenuItem("↩️ Restore Task", Nothing, AddressOf btnRestoreTask_Click)
+            itemRestore.Visible = Not isEmployee
+            Dim itemHardDelete As New ToolStripMenuItem("⚠️ Permanently Delete", Nothing, AddressOf btnHardDeleteTask_Click)
+            itemHardDelete.Visible = Not isEmployee
 
             ctxRowMenu.Items.Add(itemAccept)
             ctxRowMenu.Items.Add(itemEdit)
@@ -967,42 +1227,130 @@ Namespace Forms.Tasks
             ctxRowMenu.Items.Add(itemPriority)
             ctxRowMenu.Items.Add(New ToolStripSeparator())
             ctxRowMenu.Items.Add(itemComplete)
+            ctxRowMenu.Items.Add(New ToolStripSeparator())
+            ctxRowMenu.Items.Add(itemRestore)
+            ctxRowMenu.Items.Add(itemHardDelete)
         End Sub
 
-        ' Async Data Loading
+        Public Async Function PreloadDataAsync(navigationToken As Long) As Task Implements IPreloadableScreen.PreloadDataAsync
+            _activeNavigationToken = navigationToken
+            
+            ' Explicit Cache Freshness Policy: Reuse cached dataset if data version hasn't changed and no data error exists
+            If _isDataLoaded AndAlso _localTasksDataVersion = Forms.Common.DataStateTracker.TasksDataVersion AndAlso Not _hasDataLoadError Then
+                _appLogger.LogInfo($"[TaskCache] Reusing cached dataset for navigation token #{navigationToken} (Version: {_localTasksDataVersion}). Skipping SQL query.")
+                ApplyTabAndFilterLogic(0)
+                Return
+            End If
+
+
+            _isDataLoaded = True
+            Await LoadInitialDataInternalAsync(navigationToken)
+        End Function
+
         Public Async Function LoadInitialDataAsync() As System.Threading.Tasks.Task
+            Await LoadInitialDataInternalAsync(0)
+        End Function
+
+        Private Async Function LoadInitialDataInternalAsync(token As Long) As System.Threading.Tasks.Task
+            If _isDataLoading Then Return
+            _isDataLoading = True
+            _hasDataLoadError = False
+            _dataLoadErrorRefId = String.Empty
+
+            _dbFetchRequestCounter += 1
+            Dim currentDbReqId As Long = _dbFetchRequestCounter
+
+            _appLogger.LogInfo($"[DbFetch Req #{currentDbReqId}] Starting SQL task fetch (Token #{token})")
+
+            Dim swTotal As System.Diagnostics.Stopwatch = System.Diagnostics.Stopwatch.StartNew()
+            Dim swSql As System.Diagnostics.Stopwatch = System.Diagnostics.Stopwatch.StartNew()
+            Dim fetchSuccess As Boolean = False
+
+            ' Phase 1: SQL Data Fetching (Failures set _hasDataLoadError = True)
             Try
                 Me.Cursor = Cursors.WaitCursor
+                Dim currentRole As UserRole = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role, UserRole.Employee)
+                Dim includeDeleted As Boolean = (currentRole = UserRole.Admin OrElse currentRole = UserRole.Owner)
+                _allTasksList = Await _taskService.GetAllTasksAsync(includeDeleted)
+                swSql.Stop()
+                _localTasksDataVersion = Forms.Common.DataStateTracker.TasksDataVersion
+                fetchSuccess = True
 
-                ' 1. Fetch Authoritative Task Collection First
-                _allTasksList = Await _taskService.GetAllTasksAsync(includeDeleted:=False)
+                Dim taskCount As Integer = If(_allTasksList IsNot Nothing, _allTasksList.Count, 0)
+                _appLogger.LogInfo($"[DbFetch Req #{currentDbReqId}] SQL fetch completed successfully. Fetched {taskCount} tasks.")
+            Catch exDb As Exception
+                _hasDataLoadError = True
+                _dataLoadErrorRefId = Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper()
+                _appLogger.LogError($"[TaskDataError Req #{currentDbReqId}] SQL fetch failure (Ref ID: {_dataLoadErrorRefId}): {exDb.GetType().FullName} - {exDb.Message}", "DailyTasksControl", exDb)
+                If _allTasksList Is Nothing Then _allTasksList = New List(Of TaskDto)()
+                If _filteredTasksList Is Nothing Then _filteredTasksList = New List(Of TaskDto)()
+                RenderWorkQueueRows()
+                Return
+            Finally
+                If Not fetchSuccess Then
+                    _isDataLoading = False
+                    Me.Cursor = Cursors.Default
+                End If
+            End Try
 
-                ' 2. Populate Staff Filter Dropdown Safely
+            ' Phase 2: UI Binding & Rendering (Failures logged as [TaskUiError], NEVER as database error)
+            Try
+                If token <> 0 AndAlso token <> _activeNavigationToken Then
+                    _appLogger.LogInfo($"[DbFetch Req #{currentDbReqId}] Token #{token} superseded by active token #{_activeNavigationToken}. Discarding stale UI binding.")
+                    Return
+                End If
+
+                _isInitializingFilters = True
                 Try
                     Dim users = Await _userRepo.GetAllAsync()
                     cboStaffFilter.Items.Clear()
-                    cboStaffFilter.Items.Add("All Staff")
+                    cboStaffFilter.Items.Add(New FilterOption(Of String)("All Staff", "all"))
                     If users IsNot Nothing Then
                         For Each u In users
-                            If u.IsActive Then cboStaffFilter.Items.Add(u.FullName)
+                            If u.IsActive Then cboStaffFilter.Items.Add(New FilterOption(Of String)(u.FullName, u.FullName))
                         Next
                     End If
                     If cboStaffFilter.Items.Count > 0 Then cboStaffFilter.SelectedIndex = 0
                 Catch exUser As Exception
                     _appLogger.LogWarn($"Failed to load staff list for dropdown filter: {exUser.Message}")
+                Finally
+                    _isInitializingFilters = False
                 End Try
 
-                ' 3. Apply Filter and Render Rows
-                ApplyTabAndFilterLogic()
+                ApplyTabAndFilterLogic(0)
+                swTotal.Stop()
 
-            Catch ex As Exception
-                _appLogger.LogError($"Failed to load Daily Tasks data: {ex.Message}")
+                Dim currentProc = System.Diagnostics.Process.GetCurrentProcess()
+                Dim memUsageMb As Double = Math.Round(currentProc.WorkingSet64 / 1024.0 / 1024.0, 2)
+                Dim taskCountVal As Integer = If(_allTasksList IsNot Nothing, _allTasksList.Count, 0)
+                _appLogger.LogInfo($"[TaskPerf Req #{currentDbReqId}] Task count: {taskCountVal} | SQL duration: {swSql.ElapsedMilliseconds}ms | First-render duration: {swTotal.ElapsedMilliseconds}ms | Memory: {memUsageMb} MB")
+
+            Catch exUi As Exception
+                _appLogger.LogError($"[TaskUiError Req #{currentDbReqId}] UI rendering exception: {exUi.GetType().FullName} - {exUi.Message}", "DailyTasksControl", exUi)
             Finally
+                _isDataLoading = False
                 Me.Cursor = Cursors.Default
             End Try
         End Function
 
+        Private Sub OnSearchTextChanged(sender As Object, e As EventArgs)
+            If _isInitializingFilters OrElse _isClearingFilters OrElse Me.IsDisposed OrElse Me.Disposing Then Return
+            _searchDebounceTimer.Stop()
+            _searchDebounceTimer.Start()
+        End Sub
+
+        Private Sub OnSearchDebounceTimer_Tick(sender As Object, e As EventArgs)
+            _searchDebounceTimer.Stop()
+            If _isInitializingFilters OrElse _isClearingFilters OrElse Me.IsDisposed OrElse Me.Disposing Then Return
+            OnFilterChanged(sender, e)
+        End Sub
+
         Private Sub OnFilterChanged(sender As Object, e As EventArgs)
+            If _isInitializingFilters OrElse _isClearingFilters OrElse Me.IsDisposed OrElse Me.Disposing Then Return
+
+            _filterVersionSequence += 1
+            Dim currentVersion = _filterVersionSequence
+
             If btnClearFilters IsNot Nothing Then
                 Dim hasActiveFilters As Boolean = Not String.IsNullOrWhiteSpace(txtSearch.Text) OrElse
                                                   (cboStatusFilter IsNot Nothing AndAlso cboStatusFilter.SelectedIndex > 0) OrElse
@@ -1012,29 +1360,102 @@ Namespace Forms.Tasks
                                                   (cboDueDateFilter IsNot Nothing AndAlso cboDueDateFilter.SelectedIndex > 0)
                 btnClearFilters.Enabled = hasActiveFilters
             End If
-            ApplyTabAndFilterLogic()
+
+            Dim statusStr = If(cboStatusFilter IsNot Nothing AndAlso cboStatusFilter.SelectedItem IsNot Nothing, cboStatusFilter.SelectedItem.ToString(), "All")
+            Dim staffStr = If(cboStaffFilter IsNot Nothing AndAlso cboStaffFilter.SelectedItem IsNot Nothing, cboStaffFilter.SelectedItem.ToString(), "All")
+            Dim prioStr = If(cboPriorityFilter IsNot Nothing AndAlso cboPriorityFilter.SelectedItem IsNot Nothing, cboPriorityFilter.SelectedItem.ToString(), "All")
+            Dim typeStr = If(cboTaskTypeFilter IsNot Nothing AndAlso cboTaskTypeFilter.SelectedItem IsNot Nothing, cboTaskTypeFilter.SelectedItem.ToString(), "All")
+            Dim dueStr = If(cboDueDateFilter IsNot Nothing AndAlso cboDueDateFilter.SelectedItem IsNot Nothing, cboDueDateFilter.SelectedItem.ToString(), "All")
+            Dim searchStr = If(txtSearch IsNot Nothing, txtSearch.Text, "")
+
+            _appLogger.LogInfo($"[FilterExec Req #{currentVersion}] Request started")
+            _appLogger.LogInfo($"[FilterExec Req #{currentVersion}] Filter values: Status='{statusStr}', Staff='{staffStr}', Priority='{prioStr}', TaskType='{typeStr}', DueDate='{dueStr}', Search='{searchStr}'")
+
+            Try
+                ApplyTabAndFilterLogic(currentVersion)
+            Catch ex As Exception
+                _appLogger.LogError($"[FilterExec Req #{currentVersion}] Exception during filter execution: {ex.GetType().FullName} - {ex.Message}", "DailyTasksControl", ex)
+            End Try
         End Sub
 
         Private Sub btnClearFilters_Click(sender As Object, e As EventArgs)
-            txtSearch.Text = String.Empty
-            cboStatusFilter.SelectedIndex = 0
-            cboStaffFilter.SelectedIndex = 0
-            cboPriorityFilter.SelectedIndex = 0
-            cboTaskTypeFilter.SelectedIndex = 0
-            cboDueDateFilter.SelectedIndex = 0
-            If btnClearFilters IsNot Nothing Then btnClearFilters.Enabled = False
-            ApplyTabAndFilterLogic()
+            If _isInitializingFilters OrElse _isClearingFilters Then Return
+
+            If _hasDataLoadError Then
+                _appLogger.LogInfo("[TaskError] Retry Loading initiated - executing actual database fetch")
+                Dim taskUnused = LoadInitialDataInternalAsync(0)
+                Return
+            End If
+
+            _searchDebounceTimer.Stop()
+            _isClearingFilters = True
+            _appLogger.LogInfo($"[ClearAll] Reset sequence started - events suppressed")
+
+            Try
+                txtSearch.Text = String.Empty
+                cboStatusFilter.SelectedIndex = 0
+                cboStaffFilter.SelectedIndex = 0
+                cboPriorityFilter.SelectedIndex = 0
+                cboTaskTypeFilter.SelectedIndex = 0
+                cboDueDateFilter.SelectedIndex = 0
+                If btnClearFilters IsNot Nothing Then btnClearFilters.Enabled = False
+            Finally
+                _isClearingFilters = False
+            End Try
+
+            _filterVersionSequence += 1
+            Dim finalVersion = _filterVersionSequence
+            _appLogger.LogInfo($"[ClearAll Req #{finalVersion}] Reset completed. Executing exactly ONE filter pass against authoritative cached dataset.")
+            ApplyTabAndFilterLogic(finalVersion)
+            _appLogger.LogInfo($"[ClearAll Req #{finalVersion}] Completed successfully.")
         End Sub
 
-        Private Sub OpenTaskWorkflowScreen(task As TaskDto)
+        Private Sub OpenTaskWorkflowScreen(task As TaskDto, Optional entryPoint As String = "ContextMenu/Button")
             Dim tId As Integer = If(task IsNot Nothing, task.TaskId, 0)
-            If _mainShellHost IsNot Nothing Then
-                _mainShellHost.LoadScreen(New FrmTaskWorkspace(tId, _mainShellHost))
-            Else
-                Using dlg As New FrmTaskWorkspace(tId, Nothing)
+            If tId <= 0 Then Return
+
+            Dim traceMsg As String = $"[WorkflowOpenTrace]{Environment.NewLine}" &
+                                     $"TaskId={tId}{Environment.NewLine}" &
+                                     $"EntryPoint={entryPoint}{Environment.NewLine}" &
+                                     $"BeforeOpenTaskWorkflowScreen=True{Environment.NewLine}" &
+                                     $"BeforeFrmTaskWorkspaceConstructor=True"
+            _appLogger.LogInfo(traceMsg, "DailyTasksControl")
+
+            Try
+                Dim dlg As FrmTaskWorkspace = Nothing
+                Try
+                    dlg = New FrmTaskWorkspace(tId, _mainShellHost)
+                Catch exCtor As Exception
+                    Dim errCtorTrace As String = $"[WorkflowOpenTrace]{Environment.NewLine}" &
+                                                 $"TaskId={tId}{Environment.NewLine}" &
+                                                 $"EntryPoint={entryPoint}{Environment.NewLine}" &
+                                                 $"BeforeOpenTaskWorkflowScreen=True{Environment.NewLine}" &
+                                                 $"BeforeFrmTaskWorkspaceConstructor=True{Environment.NewLine}" &
+                                                 $"FrmTaskWorkspaceConstructed=False{Environment.NewLine}" &
+                                                 $"ExceptionType={exCtor.GetType().FullName}{Environment.NewLine}" &
+                                                 $"ExceptionMessage={exCtor.Message}{Environment.NewLine}" &
+                                                 $"StackTrace={exCtor.StackTrace}"
+                    _appLogger.LogError(errCtorTrace, "DailyTasksControl", exCtor)
+                    Throw
+                End Try
+
+                _appLogger.LogInfo($"[WorkflowOpenTrace] TaskId={tId} | FrmTaskWorkspaceConstructed=True | BeforeShowDialog=True", "DailyTasksControl")
+
+                Using dlg
                     dlg.ShowDialog(Me.FindForm())
                 End Using
-            End If
+
+                _appLogger.LogInfo($"[WorkflowOpenTrace] TaskId={tId} | ShowDialogReturned=True | ExceptionType=None | ExceptionMessage=None", "DailyTasksControl")
+            Catch ex As Exception
+                Dim errTrace As String = $"[WorkflowOpenTrace]{Environment.NewLine}" &
+                                         $"TaskId={tId}{Environment.NewLine}" &
+                                         $"EntryPoint={entryPoint}{Environment.NewLine}" &
+                                         $"ExceptionType={ex.GetType().FullName}{Environment.NewLine}" &
+                                         $"ExceptionMessage={ex.Message}{Environment.NewLine}" &
+                                         $"StackTrace={ex.StackTrace}"
+                _appLogger.LogError(errTrace, "DailyTasksControl", ex)
+                Throw
+            End Try
         End Sub
 
         Private Sub SwitchActiveTab(tabKey As String)
@@ -1051,30 +1472,55 @@ Namespace Forms.Tasks
             btnTabCompleted.Font = New Font(ThemeConstants.FontNameDefault, 9.0!, If(tabKey = "Completed", FontStyle.Bold, FontStyle.Regular))
             btnTabCompleted.ForeColor = If(tabKey = "Completed", ThemeConstants.PrimaryAccent, ThemeConstants.TextSecondary)
 
-            ApplyTabAndFilterLogic()
+            If btnTabDeletedTasks IsNot Nothing Then
+                btnTabDeletedTasks.Font = New Font(ThemeConstants.FontNameDefault, 9.0!, If(tabKey = "DeletedTasks", FontStyle.Bold, FontStyle.Regular))
+                btnTabDeletedTasks.ForeColor = If(tabKey = "DeletedTasks", ThemeConstants.PrimaryAccent, ThemeConstants.TextSecondary)
+            End If
+
+            _filterVersionSequence += 1
+            ApplyTabAndFilterLogic(_filterVersionSequence)
         End Sub
 
-        Private Sub ApplyTabAndFilterLogic()
+        Private Sub ApplyTabAndFilterLogic(Optional requestVersion As Long = 0)
             If _allTasksList Is Nothing Then Return
+            If requestVersion > 0 AndAlso requestVersion <> _filterVersionSequence Then
+                _appLogger.LogInfo($"[TaskFilter] Discarding stale filter result (Request Version {requestVersion} < Current Version {_filterVersionSequence})")
+                Return
+            End If
 
             Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
             Dim searchText = If(txtSearch IsNot Nothing, txtSearch.Text.Trim().ToLower(), String.Empty)
-            Dim selectedStatus = If(cboStatusFilter IsNot Nothing AndAlso cboStatusFilter.SelectedItem IsNot Nothing, cboStatusFilter.SelectedItem.ToString(), "All Status")
-            Dim selectedStaff = If(cboStaffFilter IsNot Nothing AndAlso cboStaffFilter.SelectedItem IsNot Nothing, cboStaffFilter.SelectedItem.ToString(), "All Staff")
-            Dim selectedPriority = If(cboPriorityFilter IsNot Nothing AndAlso cboPriorityFilter.SelectedItem IsNot Nothing, cboPriorityFilter.SelectedItem.ToString(), "All Priority")
-            Dim selectedTaskType = If(cboTaskTypeFilter IsNot Nothing AndAlso cboTaskTypeFilter.SelectedItem IsNot Nothing, cboTaskTypeFilter.SelectedItem.ToString(), "All Task Types")
-            Dim selectedDueDate = If(cboDueDateFilter IsNot Nothing AndAlso cboDueDateFilter.SelectedItem IsNot Nothing, cboDueDateFilter.SelectedItem.ToString(), "All Due Dates")
+
+            ' Extract strongly-typed filter options
+            Dim statusOpt = TryCast(cboStatusFilter.SelectedItem, FilterOption(Of StatusFilterKind))
+            Dim selectedStatusKind = If(statusOpt IsNot Nothing, statusOpt.Value, StatusFilterKind.AllStatus)
+
+            Dim priorityOpt = TryCast(cboPriorityFilter.SelectedItem, FilterOption(Of Nullable(Of TaskPriority)))
+            Dim selectedPriorityVal = If(priorityOpt IsNot Nothing, priorityOpt.Value, CType(Nothing, Nullable(Of TaskPriority)))
+
+            Dim dueDateOpt = TryCast(cboDueDateFilter.SelectedItem, FilterOption(Of String))
+            Dim selectedDueDateVal = If(dueDateOpt IsNot Nothing, dueDateOpt.Value, "all")
+
+            Dim taskTypeOpt = TryCast(cboTaskTypeFilter.SelectedItem, FilterOption(Of String))
+            Dim selectedTaskTypeVal = If(taskTypeOpt IsNot Nothing, taskTypeOpt.Value, "all")
+
+            Dim staffOpt = TryCast(cboStaffFilter.SelectedItem, FilterOption(Of String))
+            Dim selectedStaffVal = If(staffOpt IsNot Nothing, staffOpt.Value, "all")
 
             Dim today = DateTime.Today
 
             _filteredTasksList = _allTasksList.FindAll(Function(t)
-                                                           ' 1. TAB ISOLATION RULE (Completed tasks NEVER in Needs Attention)
-                                                           If _activeTab = "Completed" Then
+                                                           ' 1. TAB ISOLATION RULE
+                                                           If _activeTab = "DeletedTasks" Then
+                                                               If Not t.IsDeleted Then Return False
+                                                           Else
+                                                               If t.IsDeleted Then Return False
+                                                               
+                                                               If _activeTab = "Completed" Then
                                                                If t.WorkflowState <> TaskWorkflowState.Completed AndAlso t.WorkflowState <> TaskWorkflowState.Delivered AndAlso t.WorkflowState <> TaskWorkflowState.Closed Then
                                                                    Return False
                                                                End If
 
-                                                               ' Completed Today preset: strictly only tasks completed or due today
                                                                If _activePresetFilter = "completedtoday" OrElse _activePresetFilter = "completed_today" Then
                                                                    If Not (t.TargetDueDate.Date = today OrElse t.AssignmentDate.Date = today) Then
                                                                        Return False
@@ -1089,19 +1535,19 @@ Namespace Forms.Tasks
                                                                    Return False
                                                                End If
 
-                                                               ' DueSoon preset: strictly active tasks due within next 48 hours (today to today + 2 days)
                                                                If _activePresetFilter = "duesoon" OrElse _activePresetFilter = "due_soon" OrElse _activePresetFilter = "due48h" Then
                                                                    If Not (t.TargetDueDate.Date >= today AndAlso t.TargetDueDate.Date <= today.AddDays(2)) Then
                                                                        Return False
                                                                    End If
-                                                               ElseIf _activePresetFilter = "overdue" OrElse selectedDueDate = "Overdue" Then
+                                                               ElseIf _activePresetFilter = "overdue" OrElse selectedDueDateVal = "overdue" Then
                                                                    If Not (t.IsOverdue OrElse t.TargetDueDate.Date < today) Then
                                                                        Return False
                                                                    End If
                                                                End If
+                                                            End If
                                                            End If
 
-                                                           ' 2. FILTER MATCHING
+                                                           ' 2. SEARCH MATCHING
                                                            If Not String.IsNullOrEmpty(searchText) Then
                                                                Dim matchName = (Not String.IsNullOrEmpty(t.Title) AndAlso t.Title.ToLower().Contains(searchText))
                                                                Dim matchClient = (Not String.IsNullOrEmpty(t.ClientName) AndAlso t.ClientName.ToLower().Contains(searchText))
@@ -1109,26 +1555,74 @@ Namespace Forms.Tasks
                                                                If Not (matchName OrElse matchClient OrElse matchCode) Then Return False
                                                            End If
 
-                                                           If selectedStatus <> "All Status" AndAlso t.WorkflowState.ToString() <> selectedStatus Then Return False
-                                                           If selectedStaff <> "All Staff" AndAlso t.AssignedToName <> selectedStaff Then Return False
-                                                           If selectedPriority <> "All Priority" AndAlso t.Priority.ToString() <> selectedPriority Then Return False
-                                                           If selectedTaskType <> "All Task Types" AndAlso t.TaskType <> selectedTaskType AndAlso t.Department.ToString() <> selectedTaskType Then Return False
+                                                           ' 3. STRONGLY TYPED FILTER MATCHING
+                                                           ' Status Filter (Explicit domain mapping: Pending = NewTask OR Assigned)
+                                                           Select Case selectedStatusKind
+                                                               Case StatusFilterKind.Pending
+                                                                   If t.WorkflowState <> TaskWorkflowState.NewTask AndAlso t.WorkflowState <> TaskWorkflowState.Assigned Then Return False
+                                                               Case StatusFilterKind.InProgress
+                                                                   If t.WorkflowState <> TaskWorkflowState.InProgress Then Return False
+                                                               Case StatusFilterKind.WaitingForClient
+                                                                   If t.WorkflowState <> TaskWorkflowState.WaitingForClient Then Return False
+                                                               Case StatusFilterKind.WaitingForDocuments
+                                                                   If t.WorkflowState <> TaskWorkflowState.WaitingForDocuments Then Return False
+                                                               Case StatusFilterKind.UnderReview
+                                                                   If t.WorkflowState <> TaskWorkflowState.UnderReview Then Return False
+                                                               Case StatusFilterKind.OnHold
+                                                                   If t.WorkflowState <> TaskWorkflowState.OnHold Then Return False
+                                                               Case StatusFilterKind.Completed
+                                                                   If t.WorkflowState <> TaskWorkflowState.Completed Then Return False
+                                                               Case StatusFilterKind.AllStatus
+                                                                   ' No status filter restriction
+                                                           End Select
+
+                                                           ' Priority Filter
+                                                           If selectedPriorityVal.HasValue AndAlso t.Priority <> selectedPriorityVal.Value Then
+                                                               Return False
+                                                           End If
+
+                                                           ' Staff Filter
+                                                           If selectedStaffVal <> "all" AndAlso Not String.Equals(t.AssignedToName, selectedStaffVal, StringComparison.OrdinalIgnoreCase) Then
+                                                               Return False
+                                                           End If
+
+                                                           ' Task Type Filter
+                                                           If selectedTaskTypeVal <> "all" AndAlso Not String.Equals(t.TaskType, selectedTaskTypeVal, StringComparison.OrdinalIgnoreCase) AndAlso Not String.Equals(t.Department.ToString(), selectedTaskTypeVal, StringComparison.OrdinalIgnoreCase) Then
+                                                               Return False
+                                                           End If
+
+                                                           ' Due Date Filter
+                                                           If selectedDueDateVal <> "all" Then
+                                                               If selectedDueDateVal = "overdue" AndAlso Not (t.IsOverdue OrElse t.TargetDueDate.Date < today) Then
+                                                                   Return False
+                                                               ElseIf selectedDueDateVal = "duetoday" AndAlso t.TargetDueDate.Date <> today Then
+                                                                   Return False
+                                                               ElseIf selectedDueDateVal = "dueweek" AndAlso Not (t.TargetDueDate.Date >= today AndAlso t.TargetDueDate.Date <= today.AddDays(7)) Then
+                                                                   Return False
+                                                               ElseIf selectedDueDateVal = "duemonth" AndAlso Not (t.TargetDueDate.Date.Month = today.Month AndAlso t.TargetDueDate.Date.Year = today.Year) Then
+                                                                   Return False
+                                                               End If
+                                                           End If
 
                                                            Return True
                                                        End Function)
 
             ' Update Tab Badge Counts
-            Dim needsAttentionCount = _allTasksList.Where(Function(t) t.WorkflowState <> TaskWorkflowState.Completed AndAlso t.WorkflowState <> TaskWorkflowState.Closed AndAlso t.WorkflowState <> TaskWorkflowState.Cancelled).Count()
-            Dim myTasksCount = _allTasksList.Where(Function(t) t.AssignedToUserId = currentUserId AndAlso t.WorkflowState <> TaskWorkflowState.Completed AndAlso t.WorkflowState <> TaskWorkflowState.Closed).Count()
+            Dim needsAttentionCount = _allTasksList.Where(Function(t) Not t.IsDeleted AndAlso t.WorkflowState <> TaskWorkflowState.Completed AndAlso t.WorkflowState <> TaskWorkflowState.Closed AndAlso t.WorkflowState <> TaskWorkflowState.Cancelled).Count()
+            Dim myTasksCount = _allTasksList.Where(Function(t) Not t.IsDeleted AndAlso t.AssignedToUserId = currentUserId AndAlso t.WorkflowState <> TaskWorkflowState.Completed AndAlso t.WorkflowState <> TaskWorkflowState.Closed).Count()
             Dim allActiveCount = needsAttentionCount
-            Dim completedCount = _allTasksList.Where(Function(t) t.WorkflowState = TaskWorkflowState.Completed OrElse t.WorkflowState = TaskWorkflowState.Closed).Count()
+            Dim completedCount = _allTasksList.Where(Function(t) Not t.IsDeleted AndAlso (t.WorkflowState = TaskWorkflowState.Completed OrElse t.WorkflowState = TaskWorkflowState.Closed)).Count()
+            Dim deletedCount = _allTasksList.Where(Function(t) t.IsDeleted).Count()
 
             btnTabNeedsAttention.Text = $"Needs Attention ({needsAttentionCount})"
             btnTabMyTasks.Text = $"My Tasks ({myTasksCount})"
             btnTabAllActive.Text = $"All Active ({allActiveCount})"
             btnTabCompleted.Text = $"Completed ({completedCount})"
+            If btnTabDeletedTasks IsNot Nothing Then btnTabDeletedTasks.Text = $"Deleted Tasks ({deletedCount})"
 
             lblSubtitle.Text = $"My work queue  •  {_filteredTasksList.Count} active tasks displayed"
+
+            _appLogger.LogInfo($"[FilterExec Req #{requestVersion}] Execution finished successfully. Result count: {_filteredTasksList.Count}")
 
             ' Render Work Queue Items into Urgency Groups
             RenderWorkQueueRows()
@@ -1154,68 +1648,101 @@ Namespace Forms.Tasks
         End Sub
 
         Private Sub RenderWorkQueueRows()
-            pnlOverdueList.Controls.Clear()
-            pnlDueTodayList.Controls.Clear()
-            pnlUpcomingList.Controls.Clear()
+            Try
+                pnlQueueContentScroll.SuspendLayout()
+                pnlOverdueList.SuspendLayout()
+                pnlDueTodayList.SuspendLayout()
+                pnlUpcomingList.SuspendLayout()
 
-            Dim overdueTasks = _filteredTasksList.FindAll(Function(t) t.IsOverdue OrElse t.TargetDueDate.Date < DateTime.Today)
-            Dim dueTodayTasks = _filteredTasksList.FindAll(Function(t) Not overdueTasks.Contains(t) AndAlso t.TargetDueDate.Date = DateTime.Today)
-            Dim upcomingTasks = _filteredTasksList.FindAll(Function(t) Not overdueTasks.Contains(t) AndAlso Not dueTodayTasks.Contains(t))
+                pnlOverdueList.Controls.Clear()
+                pnlDueTodayList.Controls.Clear()
+                pnlUpcomingList.Controls.Clear()
 
-            lblOverdueHeader.Text = $"🔴 OVERDUE ({overdueTasks.Count})"
-            lblDueTodayHeader.Text = $"🟠 DUE TODAY ({dueTodayTasks.Count})"
-            lblUpcomingHeader.Text = $"🟡 UPCOMING / WORK QUEUE ({upcomingTasks.Count})"
+                Dim overdueTasks = _filteredTasksList.FindAll(Function(t) t.IsOverdue OrElse t.TargetDueDate.Date < DateTime.Today)
+                Dim dueTodayTasks = _filteredTasksList.FindAll(Function(t) Not overdueTasks.Contains(t) AndAlso t.TargetDueDate.Date = DateTime.Today)
+                Dim upcomingTasks = _filteredTasksList.FindAll(Function(t) Not overdueTasks.Contains(t) AndAlso Not dueTodayTasks.Contains(t))
 
-            pnlOverdueGroup.Visible = (overdueTasks.Count > 0)
-            pnlDueTodayGroup.Visible = (dueTodayTasks.Count > 0)
-            pnlUpcomingGroup.Visible = (upcomingTasks.Count > 0 OrElse (_filteredTasksList.Count > 0 AndAlso overdueTasks.Count = 0 AndAlso dueTodayTasks.Count = 0))
+                lblOverdueHeader.Text = $"🔴 OVERDUE ({overdueTasks.Count})"
+                lblDueTodayHeader.Text = $"🟠 DUE TODAY ({dueTodayTasks.Count})"
+                lblUpcomingHeader.Text = $"🟡 UPCOMING / WORK QUEUE ({upcomingTasks.Count})"
 
-            ' Add rows top-to-bottom
-            For Each t In overdueTasks
-                pnlOverdueList.Controls.Add(CreateTaskRowCard(t, "OVERDUE"))
-            Next
-            For Each t In dueTodayTasks
-                pnlDueTodayList.Controls.Add(CreateTaskRowCard(t, "DUETODAY"))
-            Next
-            For Each t In upcomingTasks
-                pnlUpcomingList.Controls.Add(CreateTaskRowCard(t, "UPCOMING"))
-            Next
+                pnlOverdueGroup.Visible = (overdueTasks.Count > 0)
+                pnlDueTodayGroup.Visible = (dueTodayTasks.Count > 0)
+                pnlUpcomingGroup.Visible = (upcomingTasks.Count > 0 OrElse (_filteredTasksList.Count > 0 AndAlso overdueTasks.Count = 0 AndAlso dueTodayTasks.Count = 0))
 
-            Dim hasActiveFilters As Boolean = Not String.IsNullOrWhiteSpace(txtSearch.Text) OrElse
-                                              (cboStatusFilter IsNot Nothing AndAlso cboStatusFilter.SelectedIndex > 0) OrElse
-                                              (cboStaffFilter IsNot Nothing AndAlso cboStaffFilter.SelectedIndex > 0) OrElse
-                                              (cboPriorityFilter IsNot Nothing AndAlso cboPriorityFilter.SelectedIndex > 0) OrElse
-                                              (cboTaskTypeFilter IsNot Nothing AndAlso cboTaskTypeFilter.SelectedIndex > 0) OrElse
-                                              (cboDueDateFilter IsNot Nothing AndAlso cboDueDateFilter.SelectedIndex > 0) OrElse
-                                              (_activeTab = "Completed" OrElse _activeTab = "MyTasks")
+                ' Add rows top-to-bottom
+                For Each t In overdueTasks
+                    pnlOverdueList.Controls.Add(CreateTaskRowCard(t, "OVERDUE"))
+                Next
+                For Each t In dueTodayTasks
+                    pnlDueTodayList.Controls.Add(CreateTaskRowCard(t, "DUETODAY"))
+                Next
+                For Each t In upcomingTasks
+                    pnlUpcomingList.Controls.Add(CreateTaskRowCard(t, "UPCOMING"))
+                Next
 
-            If _filteredTasksList.Count = 0 Then
-                pnlEmptyStateHost.Visible = True
-                pnlEmptyStateHost.BringToFront()
+                Dim hasActiveFilters As Boolean = Not String.IsNullOrWhiteSpace(txtSearch.Text) OrElse
+                                                  (cboStatusFilter IsNot Nothing AndAlso cboStatusFilter.SelectedIndex > 0) OrElse
+                                                  (cboStaffFilter IsNot Nothing AndAlso cboStaffFilter.SelectedIndex > 0) OrElse
+                                                  (cboPriorityFilter IsNot Nothing AndAlso cboPriorityFilter.SelectedIndex > 0) OrElse
+                                                  (cboTaskTypeFilter IsNot Nothing AndAlso cboTaskTypeFilter.SelectedIndex > 0) OrElse
+                                                  (cboDueDateFilter IsNot Nothing AndAlso cboDueDateFilter.SelectedIndex > 0) OrElse
+                                                  (_activeTab = "Completed" OrElse _activeTab = "MyTasks")
 
-                If hasActiveFilters Then
-                    lblEmptyStateIcon.Text = "🔍"
-                    lblEmptyStateTitle.Text = "No tasks found"
-                    lblEmptyStateSubtitle.Text = "No tasks match the selected filters."
+                If _hasDataLoadError Then
+                    pnlEmptyStateHost.Visible = True
+                    pnlEmptyStateHost.BringToFront()
+
+                    lblEmptyStateIcon.Text = "⚠️"
+                    lblEmptyStateTitle.Text = "Unable to load tasks"
+                    lblEmptyStateSubtitle.Text = $"We couldn't retrieve task data right now. Please check your connection and try again. (Ref: {_dataLoadErrorRefId})"
+                    btnEmptyStateClearFilters.Text = "🔄 Retry Loading"
                     btnEmptyStateClearFilters.Visible = True
-                Else
-                    lblEmptyStateIcon.Text = "📋"
-                    lblEmptyStateTitle.Text = "No active tasks"
-                    lblEmptyStateSubtitle.Text = "There are no active tasks in your work queue. Click '+ Create Task' to create a new task."
-                    btnEmptyStateClearFilters.Visible = False
+
+                    CenterEmptyStateControls()
+                    ClearTaskDetailsPanel()
+                    Return
                 End If
 
-                CenterEmptyStateControls()
-                ClearTaskDetailsPanel()
-            Else
-                pnlEmptyStateHost.Visible = False
-                Dim targetTask = If(_selectedTask IsNot Nothing AndAlso _filteredTasksList.Exists(Function(t) t.TaskId = _selectedTask.TaskId),
-                                    _filteredTasksList.First(Function(t) t.TaskId = _selectedTask.TaskId),
-                                    _filteredTasksList(0))
-                SelectTaskRow(targetTask)
-            End If
+                If _filteredTasksList.Count = 0 Then
+                    pnlEmptyStateHost.Visible = True
+                    pnlEmptyStateHost.BringToFront()
 
-            lblPaginationInfo.Text = $"Showing 1 to {_filteredTasksList.Count} of {_filteredTasksList.Count} tasks"
+                    btnEmptyStateClearFilters.Text = "Clear Filters"
+                    If hasActiveFilters Then
+                        lblEmptyStateIcon.Text = "🔍"
+                        lblEmptyStateTitle.Text = "No tasks match your filters"
+                        lblEmptyStateSubtitle.Text = "Try changing or clearing your filters."
+                        btnEmptyStateClearFilters.Visible = True
+                    Else
+                        lblEmptyStateIcon.Text = "📋"
+                        lblEmptyStateTitle.Text = "No tasks need attention right now"
+                        Dim totalCompletedCount As Integer = If(_allTasksList IsNot Nothing, _allTasksList.FindAll(Function(t) t.WorkflowState = TaskWorkflowState.Completed OrElse t.WorkflowState = TaskWorkflowState.Closed).Count, 0)
+                        If totalCompletedCount > 0 Then
+                            lblEmptyStateSubtitle.Text = $"You have {totalCompletedCount} completed tasks. Switch to the Completed tab to view them."
+                        Else
+                            lblEmptyStateSubtitle.Text = "There are currently no active tasks in your workspace."
+                        End If
+                        btnEmptyStateClearFilters.Visible = False
+                    End If
+
+                    CenterEmptyStateControls()
+                    ClearTaskDetailsPanel()
+                Else
+                    pnlEmptyStateHost.Visible = False
+                    Dim targetTask = If(_selectedTask IsNot Nothing AndAlso _filteredTasksList.Exists(Function(t) t.TaskId = _selectedTask.TaskId),
+                                        _filteredTasksList.First(Function(t) t.TaskId = _selectedTask.TaskId),
+                                        _filteredTasksList(0))
+                    SelectTaskRow(targetTask)
+                End If
+
+                lblPaginationInfo.Text = $"Showing 1 to {_filteredTasksList.Count} of {_filteredTasksList.Count} tasks"
+            Finally
+                pnlUpcomingList.ResumeLayout(True)
+                pnlDueTodayList.ResumeLayout(True)
+                pnlOverdueList.ResumeLayout(True)
+                pnlQueueContentScroll.ResumeLayout(True)
+            End Try
         End Sub
 
         Private Function CreateTaskRowCard(task As TaskDto, urgencyCategory As String) As Panel
@@ -1228,6 +1755,8 @@ Namespace Forms.Tasks
                 .Cursor = Cursors.Hand,
                 .Tag = task
             }
+
+            pnlRow.SuspendLayout()
 
             AddHandler pnlRow.Paint, Sub(s, e)
                                          e.Graphics.SmoothingMode = SmoothingMode.AntiAlias
@@ -1352,6 +1881,9 @@ Namespace Forms.Tasks
             pnlRow.Controls.Add(lblDue)
             pnlRow.Controls.Add(lblClient)
             pnlRow.Controls.Add(lblTitle)
+
+            pnlRow.ResumeLayout(False)
+
 
             ' Event Handlers for Row Selection & Double Click across ALL card child controls
             Dim clickHandler As EventHandler = Sub(s, e) SelectTaskRow(task)
@@ -1522,12 +2054,28 @@ Namespace Forms.Tasks
             UpdateVisualRowHighlights()
 
             ' Context Menu Item Enablement
-            If ctxRowMenu IsNot Nothing AndAlso ctxRowMenu.Items.Count >= 9 Then
-                ctxRowMenu.Items(0).Enabled = canAccept
-                ctxRowMenu.Items(0).Visible = canAccept
-                ctxRowMenu.Items(1).Enabled = canEdit
-                ctxRowMenu.Items(2).Enabled = canDelete
-                ctxRowMenu.Items(8).Enabled = canComplete
+            If ctxRowMenu IsNot Nothing AndAlso ctxRowMenu.Items.Count >= 12 Then
+                Dim isDeletedTask = task.IsDeleted
+                Dim isAdminOrOwner = (currentRole = UserRole.Admin OrElse currentRole = UserRole.Owner)
+                
+                ctxRowMenu.Items(0).Enabled = canAccept AndAlso Not isDeletedTask
+                ctxRowMenu.Items(0).Visible = canAccept AndAlso Not isDeletedTask
+                ctxRowMenu.Items(1).Enabled = canEdit AndAlso Not isDeletedTask
+                ctxRowMenu.Items(1).Visible = Not isDeletedTask
+                ctxRowMenu.Items(2).Enabled = canDelete AndAlso Not isDeletedTask
+                ctxRowMenu.Items(2).Visible = Not isDeletedTask
+                
+                ctxRowMenu.Items(3).Visible = Not isDeletedTask
+                ctxRowMenu.Items(4).Visible = Not isDeletedTask
+                ctxRowMenu.Items(5).Visible = Not isDeletedTask
+                ctxRowMenu.Items(6).Visible = Not isDeletedTask
+                ctxRowMenu.Items(7).Visible = Not isDeletedTask
+                ctxRowMenu.Items(8).Enabled = canComplete AndAlso Not isDeletedTask
+                ctxRowMenu.Items(8).Visible = Not isDeletedTask
+                
+                ctxRowMenu.Items(9).Visible = isDeletedTask AndAlso isAdminOrOwner
+                ctxRowMenu.Items(10).Visible = isDeletedTask AndAlso isAdminOrOwner
+                ctxRowMenu.Items(11).Visible = isDeletedTask AndAlso isAdminOrOwner
             End If
 
             lblDetailTaskName.Text = task.Title
@@ -1542,12 +2090,13 @@ Namespace Forms.Tasks
                 lblDetailPriorityBadge.BackColor = Color.FromArgb(254, 243, 199)
             End If
 
-            lblMetaClientVal.Text = task.ClientName
-            lblMetaGstinVal.Text = $"{task.TaskCode} 🔗"
-            lblMetaDueDateVal.Text = If(task.IsOverdue, $"Overdue by {task.DaysOverdue} days", task.TargetDueDate.ToString("dd MMM yyyy"))
-            lblMetaAssigneeVal.Text = task.AssignedToName
-            lblMetaStatusVal.Text = task.WorkflowState.ToString()
-            lblMetaCreatedOnVal.Text = task.AssignmentDate.ToString("dd MMM yyyy")
+            If lblMetaClientVal IsNot Nothing Then lblMetaClientVal.Text = task.ClientName
+            If lblMetaGstinVal IsNot Nothing Then lblMetaGstinVal.Text = $"{task.TaskCode} 🔗"
+            If lblMetaDueDateVal IsNot Nothing Then lblMetaDueDateVal.Text = If(task.IsOverdue, $"Overdue by {task.DaysOverdue} days", task.TargetDueDate.ToString("dd MMM yyyy"))
+            If lblMetaAssigneeVal IsNot Nothing Then lblMetaAssigneeVal.Text = task.AssignedToName
+            If lblMetaStatusVal IsNot Nothing Then lblMetaStatusVal.Text = task.WorkflowState.ToString()
+            If lblMetaCreatedOnVal IsNot Nothing Then lblMetaCreatedOnVal.Text = task.AssignmentDate.ToString("dd MMM yyyy")
+            If lblMetaCreatedByVal IsNot Nothing Then lblMetaCreatedByVal.Text = If(Not String.IsNullOrEmpty(task.AssignedByName), task.AssignedByName, "Admin")
 
             ' Load Real Task Notes / Discussions from IDiscussionService
             Try
@@ -1560,7 +2109,7 @@ Namespace Forms.Tasks
                 Else
                     lblNotesHeader.Text = "📝 NOTES (0)"
                     lblNotesContent.Text = "No discussion notes logged for this task yet."
-                    lblNotesAuthorDate.Text = "Use FrmTaskWorkspace to log discussions."
+                    lblNotesAuthorDate.Text = "—"
                 End If
             Catch ex As Exception
                 lblNotesHeader.Text = "📝 NOTES (0)"
@@ -1574,14 +2123,27 @@ Namespace Forms.Tasks
 
         Private Async Function RenderNextActionChecklistAsync(task As TaskDto) As System.Threading.Tasks.Task
             pnlChecklistHost.Controls.Clear()
+            If task Is Nothing Then Return
 
-            ' Default workflow checklist steps for compliance tasks
-            Dim steps As New List(Of ChecklistStepItem)() From {
-                New ChecklistStepItem With {.StepText = "1. Verify purchase & sales data", .IsCompleted = False, .IsMandatory = True},
-                New ChecklistStepItem With {.StepText = "2. Match with GSTR-2B ITC statement", .IsCompleted = False, .IsMandatory = True},
-                New ChecklistStepItem With {.StepText = "3. Prepare return summary draft", .IsCompleted = False, .IsMandatory = True},
-                New ChecklistStepItem With {.StepText = "4. File return on GST Govt Portal", .IsCompleted = False, .IsMandatory = True}
-            }
+            ' Authoritative 3-tier task-type workflow template resolution (Canonical ID -> Display String -> Fallback Normalization)
+            Dim resolutionTier As String = ""
+            Dim tmpl = TaskWorkflowTemplateProvider.GetTemplateWithTier(task.TaskType, task.CategoryCode, task.Title, resolutionTier)
+
+            If Not String.IsNullOrWhiteSpace(task.CategoryCode) AndAlso Not resolutionTier.StartsWith("Tier 1") Then
+                _appLogger.LogWarn($"[WorkflowCanonicalMappingError] TaskId={task.TaskId} | CategoryCode='{task.CategoryCode}' exists but failed Tier 1 resolution! Fell back to '{resolutionTier}' (ResolvedTemplate='{tmpl.TaskType}')", "DailyTasksControl")
+            End If
+
+            Dim steps As New List(Of ChecklistStepItem)()
+
+            If tmpl IsNot Nothing AndAlso tmpl.StandardSteps IsNot Nothing AndAlso tmpl.StandardSteps.Count > 0 Then
+                For idx As Integer = 0 To tmpl.StandardSteps.Count - 1
+                    steps.Add(New ChecklistStepItem With {
+                        .StepText = $"{idx + 1}. {tmpl.StandardSteps(idx)}",
+                        .IsCompleted = False,
+                        .IsMandatory = True
+                    })
+                Next
+            End If
 
             ' Fetch persisted activities from SQL Server database via ITaskActivityRepository
             Try
@@ -1598,25 +2160,58 @@ Namespace Forms.Tasks
                     Next
                 End If
             Catch ex As Exception
+                _appLogger.LogError($"Checklist activity fetch error: {ex.Message}", "DailyTasksControl", ex)
             End Try
 
             _taskChecklistCache(task.TaskId) = steps
 
-            For Each st In steps
+            ' Identify current active step index (first uncompleted step)
+            Dim currentActiveIndex As Integer = steps.FindIndex(Function(s) Not s.IsCompleted)
+            Dim completedCount As Integer = steps.FindAll(Function(s) s.IsCompleted).Count
+
+            Dim renderedStepsStr As String = String.Join(" | ", steps.Select(Function(s) (If(s.IsCompleted, "[✓] ", "[ ] ")) & s.StepText))
+            Dim traceMsg As String = $"[WorkflowTrace]" & vbCrLf &
+                                     $"TaskId={task.TaskId}" & vbCrLf &
+                                     $"SQL.Department={task.Department}" & vbCrLf &
+                                     $"SQL.TaskType={task.TaskType}" & vbCrLf &
+                                     $"SQL.CategoryCode={task.CategoryCode}" & vbCrLf &
+                                     $"DTO.Department={task.Department}" & vbCrLf &
+                                     $"DTO.TaskType={task.TaskType}" & vbCrLf &
+                                     $"DTO.CategoryCode={task.CategoryCode}" & vbCrLf &
+                                     $"ResolverInput.TaskType={task.TaskType}" & vbCrLf &
+                                     $"ResolverInput.CategoryCode={task.CategoryCode}" & vbCrLf &
+                                     $"ResolutionTier={resolutionTier}" & vbCrLf &
+                                     $"ResolvedTemplate={tmpl.TaskType}" & vbCrLf &
+                                     $"RenderedSteps={renderedStepsStr}"
+            _appLogger.LogInfo(traceMsg, "DailyTasksControl")
+
+            For idx As Integer = 0 To steps.Count - 1
+                Dim st = steps(idx)
                 Dim chk As New CheckBox() With {
-                    .Text = st.StepText,
                     .Checked = st.IsCompleted,
-                    .Font = New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Regular),
-                    .ForeColor = Color.FromArgb(30, 41, 59),
                     .AutoSize = True,
-                    .Margin = New Padding(0, 2, 0, 2),
+                    .Margin = New Padding(0, 3, 0, 3),
                     .Tag = st
                 }
+
+                If st.IsCompleted Then
+                    chk.Text = $"✓  {st.StepText}"
+                    chk.Font = New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Regular)
+                    chk.ForeColor = Color.FromArgb(16, 185, 129) ' Emerald Green
+                ElseIf idx = currentActiveIndex Then
+                    chk.Text = $"➔  {st.StepText}  (NEXT ACTION)"
+                    chk.Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold)
+                    chk.ForeColor = Color.FromArgb(37, 99, 235) ' Vibrant Primary Blue
+                Else
+                    chk.Text = $"○  {st.StepText}"
+                    chk.Font = New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Regular)
+                    chk.ForeColor = Color.FromArgb(100, 116, 139) ' Slate Gray
+                End If
+
                 AddHandler chk.CheckedChanged, Async Sub(s, e)
                                                    st.IsCompleted = chk.Checked
-                                                   If chk.Checked Then
-                                                       ' Idempotency Guard: Ensure step activity has not already been logged in tbl_TaskActivities
-                                                       Try
+                                                   Try
+                                                       If chk.Checked Then
                                                            Dim stepDesc As String = "[CHECKLIST_COMPLETE] " & st.StepText
                                                            Dim existingActs = Await _activityRepo.GetActivitiesByTaskAsync(task.TaskId)
                                                            Dim alreadyLogged As Boolean = (existingActs IsNot Nothing AndAlso existingActs.Exists(Function(a) Not String.IsNullOrEmpty(a.ActivityDescription) AndAlso a.ActivityDescription.Trim() = stepDesc.Trim()))
@@ -1636,9 +2231,26 @@ Namespace Forms.Tasks
                                                                }
                                                                Await _activityRepo.AddChecklistCompletionIdempotentAsync(actEntity)
                                                            End If
-                                                       Catch ex As Exception
-                                                       End Try
-                                                   End If
+                                                       Else
+                                                           ' Two-way reversible checklist persistence: remove completion activity when unchecked
+                                                           Await _activityRepo.RemoveChecklistCompletionAsync(task.TaskId, st.StepText)
+                                                       End If
+
+                                                       ' Check if ALL statutory steps are now completed for this task
+                                                       If steps.Count > 0 AndAlso steps.All(Function(stepItem) stepItem.IsCompleted) Then
+                                                           _appLogger.LogInfo($"[WorkflowComplete] All {steps.Count} steps completed for TaskId #{task.TaskId} ('{task.Title}'). Transitioning WorkflowState to Completed.", "DailyTasksControl")
+                                                           Await _taskService.CompleteTaskAsync(task.TaskId)
+                                                           Forms.Common.DataStateTracker.MarkTasksChanged()
+                                                           Await LoadInitialDataAsync()
+                                                           Return
+                                                       End If
+
+                                                   Catch ex As Exception
+                                                       _appLogger.LogError($"Activity step persistence error: {ex.Message}", "DailyTasksControl", ex)
+                                                   End Try
+
+                                                   ' Dynamically refresh checklist visual progression states
+                                                   Await RenderNextActionChecklistAsync(task)
                                                End Sub
                 pnlChecklistHost.Controls.Add(chk)
             Next
@@ -1665,16 +2277,17 @@ Namespace Forms.Tasks
             lblDetailPriorityBadge.ForeColor = ThemeConstants.TextSecondary
             lblDetailPriorityBadge.BackColor = Color.FromArgb(241, 245, 249)
 
-            lblMetaClientVal.Text = "—"
-            lblMetaGstinVal.Text = "—"
-            lblMetaDueDateVal.Text = "—"
-            lblMetaAssigneeVal.Text = "—"
-            lblMetaStatusVal.Text = "—"
-            lblMetaCreatedOnVal.Text = "—"
-            lblNotesHeader.Text = "📝 NOTES (0)"
-            lblNotesContent.Text = "No task selected."
-            lblNotesAuthorDate.Text = "—"
-            pnlChecklistHost.Controls.Clear()
+            If lblMetaClientVal IsNot Nothing Then lblMetaClientVal.Text = "—"
+            If lblMetaGstinVal IsNot Nothing Then lblMetaGstinVal.Text = "—"
+            If lblMetaDueDateVal IsNot Nothing Then lblMetaDueDateVal.Text = "—"
+            If lblMetaAssigneeVal IsNot Nothing Then lblMetaAssigneeVal.Text = "—"
+            If lblMetaStatusVal IsNot Nothing Then lblMetaStatusVal.Text = "—"
+            If lblMetaCreatedOnVal IsNot Nothing Then lblMetaCreatedOnVal.Text = "—"
+            If lblMetaCreatedByVal IsNot Nothing Then lblMetaCreatedByVal.Text = "—"
+            If lblNotesHeader IsNot Nothing Then lblNotesHeader.Text = "📝 NOTES (0)"
+            If lblNotesContent IsNot Nothing Then lblNotesContent.Text = "No task selected."
+            If lblNotesAuthorDate IsNot Nothing Then lblNotesAuthorDate.Text = "—"
+            If pnlChecklistHost IsNot Nothing Then pnlChecklistHost.Controls.Clear()
 
             If btnEditTask IsNot Nothing Then btnEditTask.Enabled = False
             If btnDeleteTask IsNot Nothing Then btnDeleteTask.Enabled = False
@@ -1771,54 +2384,39 @@ Namespace Forms.Tasks
                     If dlg.ShowDialog(Me.FindForm()) = DialogResult.OK Then
                         Dim newId As Integer = dlg.CreatedTaskId
 
-                        ' 1. Re-query authoritative tasks from database
-                        Await LoadInitialDataAsync()
+                        ' Post-Create Refresh Sequence
+                        Try
+                            ' 1. Re-query authoritative tasks from database
+                            Await LoadInitialDataAsync()
 
-                        If newId > 0 Then
-                            ' Locate created task in authoritative collection
-                            Dim createdTask = _allTasksList.FirstOrDefault(Function(t) t.TaskId = newId)
+                            If newId > 0 Then
+                                ' Locate created task in authoritative collection
+                                Dim createdTask = _allTasksList.FirstOrDefault(Function(t) t.TaskId = newId)
 
-                            If createdTask Is Nothing Then
-                                ' Direct database verification if missing from main collection
-                                Dim dbVerify = Await _taskService.GetTaskByIdAsync(newId)
-                                If dbVerify IsNot Nothing Then
-                                    _appLogger.LogWarn($"Created TaskId {newId} ({dbVerify.Title}) exists in database but was excluded from GetAllTasksAsync collection. State: {dbVerify.WorkflowState}")
-                                    _allTasksList.Insert(0, dbVerify)
-                                    createdTask = dbVerify
-                                Else
-                                    Dim errDetails As String = $"TaskId #{newId} was returned by FrmCreateTask but GetTaskByIdAsync({newId}) returned NULL."
-                                    _appLogger.LogError(errDetails)
-                                    Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "DIAGNOSTIC ERROR", errDetails, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                                If createdTask Is Nothing Then
+                                    Dim dbVerify = Await _taskService.GetTaskByIdAsync(newId)
+                                    If dbVerify IsNot Nothing Then
+                                        _appLogger.LogWarn($"Created TaskId {newId} ({dbVerify.Title}) exists in database but was excluded from GetAllTasksAsync collection. State: {dbVerify.WorkflowState}")
+                                        _allTasksList.Insert(0, dbVerify)
+                                        createdTask = dbVerify
+                                    End If
                                 End If
-                            End If
 
-                            If createdTask IsNot Nothing Then
-                                ' Explicit tab & filter alignment
-                                EnsureTaskMatchesActiveFilters(createdTask)
-
-                                ' Re-run filter logic and refresh view
-                                ApplyTabAndFilterLogic()
-
-                                ' Verify task presence in filtered list
-                                If _filteredTasksList.Exists(Function(t) t.TaskId = newId) Then
-                                    SelectTaskRow(createdTask)
-                                Else
-                                    Dim activeFiltersSummary As String = $"ActiveTab: {_activeTab}, Search: '{txtSearch.Text}', Status: '{cboStatusFilter?.SelectedItem}', Staff: '{cboStaffFilter?.SelectedItem}', Priority: '{cboPriorityFilter?.SelectedItem}', TaskType: '{cboTaskTypeFilter?.SelectedItem}'"
-                                    Dim diagError As String = $"Task #{newId} ({createdTask.Title}) was created but remains hidden by filters. UI State: [{activeFiltersSummary}], Task State: [WorkflowState: {createdTask.WorkflowState}, AssignedTo: {createdTask.AssignedToUserId}]."
-                                    _appLogger.LogError(diagError)
-                                    Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "POST-CREATE FILTER ERROR", diagError, Forms.Common.AlertType.WarningAlert, actionText:="OK")
-
-                                    ' Fallback: Select task directly to show details sidebar
+                                If createdTask IsNot Nothing Then
+                                    EnsureTaskMatchesActiveFilters(createdTask)
+                                    ApplyTabAndFilterLogic(0)
                                     SelectTaskRow(createdTask)
                                 End If
                             End If
-                        End If
+                        Catch exRefresh As Exception
+                            _appLogger.LogError($"[TaskPostCreateError] Post-create refresh warning: {exRefresh.Message}", "DailyTasksControl", exRefresh)
+                        End Try
 
                         Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "TASK CREATED", "Task created successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                     End If
                 End Using
             Catch ex As Exception
-                _appLogger.LogError($"Task creation modal dialog error: {ex.Message}")
+                _appLogger.LogError($"Task creation modal dialog error: {ex.Message}", "DailyTasksControl", ex)
             Finally
                 SetActionButtonsEnabled(True)
                 _isOperationRunning = False
@@ -1827,8 +2425,9 @@ Namespace Forms.Tasks
 
         Private Sub btnOpenWorkflow_Click(sender As Object, e As EventArgs)
             If _isOperationRunning Then Return
+            Dim entryPointStr As String = If(TypeOf sender Is ToolStripMenuItem, "ContextMenu ('Open Task / Workflow')", "SidebarButton ('Open Workflow')")
             If _selectedTask IsNot Nothing Then
-                OpenTaskWorkflowScreen(_selectedTask)
+                OpenTaskWorkflowScreen(_selectedTask, entryPointStr)
             Else
                 Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Selection Required", "Please select a task from the queue to open workflow.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
             End If
@@ -1893,6 +2492,9 @@ Namespace Forms.Tasks
 
             _isOperationRunning = True
             SetActionButtonsEnabled(False)
+            
+            Dim currentRole As UserRole = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role, UserRole.Employee)
+            Dim isEmployee = currentRole = UserRole.Employee
 
             Try
                 ' 1. Ground-Truth Status Re-Query: Re-fetch latest status from database before executing completion
@@ -1920,13 +2522,25 @@ Namespace Forms.Tasks
                 End If
 
                 ' 3. Confirmation Modal Guard
-                Dim confirmMsg = $"Complete {_selectedTask.Title}?{Environment.NewLine}{Environment.NewLine}Confirm that the return has been filed and all required work has been verified."
-                Dim confirmRes = Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Confirm Completion", confirmMsg, Forms.Common.AlertType.WarningAlert, actionText:="CONFIRM COMPLETE", showCancel:=True, cancelText:="CANCEL")
+                Dim actionVerb = If(isEmployee, "Submit", "Complete")
+                Dim confirmMsg = If(isEmployee,
+                    $"Submit {_selectedTask.Title} for review?{Environment.NewLine}{Environment.NewLine}Confirm that you have finished your work.",
+                    $"Complete {_selectedTask.Title}?{Environment.NewLine}{Environment.NewLine}Confirm that the return has been filed and all required work has been verified.")
+
+                Dim confirmRes = Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), $"Confirm {actionVerb}", confirmMsg, Forms.Common.AlertType.WarningAlert, actionText:=$"CONFIRM {actionVerb.ToUpper()}", showCancel:=True, cancelText:="CANCEL")
 
                 If confirmRes = DialogResult.OK Then
                     Me.Cursor = Cursors.WaitCursor
-                    Await _taskService.CompleteTaskAsync(_selectedTask.TaskId)
-                    Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Task Completed", $"Task '{_selectedTask.Title}' marked completed successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
+                    
+                    If isEmployee Then
+                        Await _taskService.TransitionTaskStateAsync(_selectedTask.TaskId, TaskWorkflowState.UnderReview)
+                        Forms.Common.DataStateTracker.MarkTasksChanged()
+                        Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Task Submitted", $"Task '{_selectedTask.Title}' submitted for review successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
+                    Else
+                        Await _taskService.CompleteTaskAsync(_selectedTask.TaskId)
+                        Forms.Common.DataStateTracker.MarkTasksChanged()
+                        Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Task Completed", $"Task '{_selectedTask.Title}' marked completed successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
+                    End If
                     Await LoadInitialDataAsync()
                 End If
             Catch ex As Exception
@@ -2033,6 +2647,8 @@ Namespace Forms.Tasks
                     Dim success = Await _taskService.SoftDeleteTaskAsync(latestTask.TaskId, latestTask.ModifiedOn)
 
                     If success Then
+
+                        Forms.Common.DataStateTracker.MarkTasksChanged()
                         ' Rule 9 Queue refresh behavior
                         Await LoadInitialDataAsync()
 
@@ -2102,6 +2718,7 @@ Namespace Forms.Tasks
             Try
                 _selectedTask.Priority = If(_selectedTask.Priority = TaskPriority.High, TaskPriority.Medium, TaskPriority.High)
                 Await _taskService.UpdateTaskAsync(_selectedTask)
+                Forms.Common.DataStateTracker.MarkTasksChanged()
                 Await LoadInitialDataAsync()
             Catch ex As Exception
                 Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Error", ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
@@ -2110,5 +2727,120 @@ Namespace Forms.Tasks
                 _isOperationRunning = False
             End Try
         End Sub
+
+        Private Async Sub btnRestoreTask_Click(sender As Object, e As EventArgs)
+            If _isOperationRunning Then Return
+            If _selectedTask Is Nothing Then Return
+
+            _isOperationRunning = True
+            SetActionButtonsEnabled(False)
+
+            Dim needsRefresh As Boolean = False
+            Try
+                Dim confirmRes = Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Restore Task?", $"Are you sure you want to restore task {_selectedTask.TaskCode} – '{_selectedTask.Title}' to the active queue?", Forms.Common.AlertType.WarningAlert, actionText:="RESTORE TASK", showCancel:=True, cancelText:="CANCEL")
+                If confirmRes = DialogResult.OK Then
+                    Me.Cursor = Cursors.WaitCursor
+                    Dim success = Await _taskService.RestoreTaskAsync(_selectedTask.TaskId)
+                    If success Then
+                        _localTasksDataVersion = 0
+                        Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Task Restored", $"Task {_selectedTask.TaskCode} has been restored to the active queue.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
+                        Await LoadInitialDataAsync()
+                    End If
+                End If
+            Catch ex As Exception
+                _appLogger.LogError($"Error restoring task ID {_selectedTask.TaskId}", "DailyTasksControl", ex)
+                Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Restore Failed", ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                needsRefresh = True
+            Finally
+                Me.Cursor = Cursors.Default
+                _isOperationRunning = False
+                SetActionButtonsEnabled(True)
+            End Try
+
+            If needsRefresh Then
+                Await LoadInitialDataAsync()
+            End If
+        End Sub
+
+        Private Async Sub btnHardDeleteTask_Click(sender As Object, e As EventArgs)
+            If _isOperationRunning Then Return
+            If _selectedTask Is Nothing Then Return
+
+            _isOperationRunning = True
+            SetActionButtonsEnabled(False)
+
+            Dim needsRefresh As Boolean = False
+            Try
+                Dim confirmRes = ShowDeleteConfirmationDialog(_selectedTask.TaskCode)
+                If confirmRes Then
+                    Me.Cursor = Cursors.WaitCursor
+                    Dim success = Await _taskService.PermanentlyDeleteTaskAsync(_selectedTask.TaskId)
+                    If success Then
+                        _localTasksDataVersion = 0
+                        Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Task Deleted", $"Task {_selectedTask.TaskCode} has been permanently deleted.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
+                        Await LoadInitialDataAsync()
+                    End If
+                End If
+            Catch ex As Exception
+                _appLogger.LogError($"Error permanently deleting task ID {_selectedTask.TaskId}", "DailyTasksControl", ex)
+                Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "Delete Failed", ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                needsRefresh = True
+            Finally
+                Me.Cursor = Cursors.Default
+                _isOperationRunning = False
+                SetActionButtonsEnabled(True)
+            End Try
+
+            If needsRefresh Then
+                Await LoadInitialDataAsync()
+            End If
+        End Sub
+
+        Private Function ShowDeleteConfirmationDialog(taskCode As String) As Boolean
+            Dim frm As New Form()
+            frm.Text = "Permanently Delete Task"
+            frm.Size = New Size(420, 200)
+            frm.StartPosition = FormStartPosition.CenterParent
+            frm.FormBorderStyle = FormBorderStyle.FixedDialog
+            frm.MaximizeBox = False
+            frm.MinimizeBox = False
+            frm.ShowInTaskbar = False
+
+            Dim lbl As New Label()
+            lbl.Text = $"To permanently delete this task, please type its reference code ({taskCode}) below:"
+            lbl.Location = New Point(20, 20)
+            lbl.AutoSize = True
+            frm.Controls.Add(lbl)
+
+            Dim txt As New TextBox()
+            txt.Location = New Point(20, 50)
+            txt.Width = 360
+            frm.Controls.Add(txt)
+
+            Dim btnOk As New Button()
+            btnOk.Text = "Permanently Delete"
+            btnOk.Location = New Point(180, 100)
+            btnOk.Width = 120
+            btnOk.Enabled = False
+            btnOk.DialogResult = DialogResult.OK
+            frm.Controls.Add(btnOk)
+
+            Dim btnCancel As New Button()
+            btnCancel.Text = "Cancel"
+            btnCancel.Location = New Point(310, 100)
+            btnCancel.Width = 70
+            btnCancel.DialogResult = DialogResult.Cancel
+            frm.Controls.Add(btnCancel)
+
+            AddHandler txt.TextChanged, Sub(s, e)
+                                            btnOk.Enabled = (txt.Text.Trim().ToUpper() = taskCode.ToUpper())
+                                        End Sub
+
+            frm.AcceptButton = btnOk
+            frm.CancelButton = btnCancel
+
+            Dim result = frm.ShowDialog(Me.FindForm())
+            Return (result = DialogResult.OK)
+        End Function
     End Class
 End Namespace

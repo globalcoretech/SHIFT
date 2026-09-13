@@ -97,8 +97,8 @@ Namespace Forms.Admin
             }
 
             btnHeaderBack = New KryptonButton() With {
-                .Text = "← Back to Administration",
-                .Size = New Size(175, 32),
+                .Text = "← Back to Settings",
+                .Size = New Size(140, 32),
                 .Margin = New Padding(0)
             }
             ThemeConstants.ApplyKryptonSecondaryButton(btnHeaderBack)
@@ -390,7 +390,7 @@ Namespace Forms.Admin
                     parentShell = TryCast(Me.Parent.FindForm(), FrmMainShell)
                 End If
                 If parentShell IsNot Nothing Then
-                    parentShell.NavigateToModule("Admin")
+                    parentShell.NavigateToModule("Settings")
                 Else
                     Me.Close()
                 End If

@@ -12,7 +12,7 @@ Namespace Configuration
         Implements IAppConfiguration
 
         Public Function GetConnectionString(Optional name As String = "StaffAutomationDb") As String Implements IAppConfiguration.GetConnectionString
-            ' 1. Check Environment Variable Precedence (e.g., STAFFAUTOMATIONDB_CONNECTIONSTRING, SQLSERVER_CONNECTION_STRING, or StaffAutomationDb_ConnectionString)
+            ' Precedence 1: Environment Variable
             Dim envConn = Environment.GetEnvironmentVariable("STAFFAUTOMATIONDB_CONNECTIONSTRING")
             If String.IsNullOrWhiteSpace(envConn) Then
                 envConn = Environment.GetEnvironmentVariable("SQLSERVER_CONNECTION_STRING")
@@ -28,12 +28,51 @@ Namespace Configuration
                 Return envConn.Trim()
             End If
 
-            ' 2. Fallback to App.config ConnectionStrings
-            Dim connObj = ConfigurationManager.ConnectionStrings(name)
-            If connObj Is Nothing OrElse String.IsNullOrWhiteSpace(connObj.ConnectionString) Then
-                Throw New StaffAutomation.Core.Exceptions.ConfigurationException($"Database connection string '{name}' was not found in Environment variables or App.config.", name)
+            ' Precedence 2: Local per-machine dbconnection.json (%APPDATA%\SHIFTWorkforce\dbconnection.json or local fallback)
+            Dim jsonConnStr = GetLocalMachineJsonConnectionString()
+            If Not String.IsNullOrWhiteSpace(jsonConnStr) Then
+                Return jsonConnStr
             End If
-            Return connObj.ConnectionString
+
+            ' Precedence 3: Existing App.config ConnectionStrings
+            Dim connObj = ConfigurationManager.ConnectionStrings(name)
+            If connObj IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(connObj.ConnectionString) Then
+                Return connObj.ConnectionString
+            End If
+
+            ' Precedence 4: Clear Configuration Exception if no valid configuration exists
+            Throw New StaffAutomation.Core.Exceptions.ConfigurationException(
+                $"Configuration Error: Database connection string '{name}' was not found. Checked: (1) Environment Variables, (2) Local Machine dbconnection.json, and (3) App.config. Please configure database settings via System Settings or Environment Variables.", name)
+        End Function
+
+        ''' <summary>
+        ''' Reads local per-machine dbconnection.json configuration from %APPDATA%\SHIFTWorkforce or application root.
+        ''' </summary>
+        Private Function GetLocalMachineJsonConnectionString() As String
+            Try
+                ' Check Primary Machine Path: %APPDATA%\SHIFTWorkforce\dbconnection.json
+                Dim machinePath = DatabaseConnectionSettings.GetDefaultMachineConfigPath()
+                If System.IO.File.Exists(machinePath) Then
+                    Dim settings = DatabaseConnectionSettings.LoadFromFile(machinePath)
+                    If settings IsNot Nothing Then
+                        Dim connStr = settings.BuildConnectionString()
+                        If Not String.IsNullOrWhiteSpace(connStr) Then Return connStr
+                    End If
+                End If
+
+                ' Check Secondary Fallback Path: dbconnection.json in app directory
+                Dim fallbackPath = DatabaseConnectionSettings.GetFallbackLocalConfigPath()
+                If System.IO.File.Exists(fallbackPath) Then
+                    Dim settings = DatabaseConnectionSettings.LoadFromFile(fallbackPath)
+                    If settings IsNot Nothing Then
+                        Dim connStr = settings.BuildConnectionString()
+                        If Not String.IsNullOrWhiteSpace(connStr) Then Return connStr
+                    End If
+                End If
+            Catch
+            End Try
+
+            Return Nothing
         End Function
 
         Public Function GetSetting(key As String, Optional defaultValue As String = "") As String Implements IAppConfiguration.GetSetting

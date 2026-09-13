@@ -11,6 +11,7 @@ Namespace DTOs
         Public Property Description As String = String.Empty
         Public Property TaskType As String = String.Empty
         Public Property CategoryId As Integer
+        Public Property CategoryCode As String = String.Empty
         Public Property FinancialYearId As Integer
         Public Property ClientId As Integer
         Public Property ClientName As String = String.Empty
@@ -28,5 +29,7 @@ Namespace DTOs
         Public Property DaysRemaining As Integer
         Public Property DaysOverdue As Integer
         Public Property IsOverdue As Boolean
+        Public Property IsDeleted As Boolean
+        Public Property TotalWorkMinutes As Integer
     End Class
 End Namespace

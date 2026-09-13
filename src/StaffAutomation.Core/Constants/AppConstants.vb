@@ -4,7 +4,14 @@ Namespace Constants
     ''' </summary>
     Public Class AppConstants
         Public Const AppName As String = "CA Office Workforce Productivity Automation System"
-        Public Const AppVersion As String = "1.0.0.0"
+        Public Shared ReadOnly Property AppVersion As String
+            Get
+                Dim asm = System.Reflection.Assembly.GetEntryAssembly()
+                If asm Is Nothing Then asm = System.Reflection.Assembly.GetExecutingAssembly()
+                Return asm.GetName().Version.ToString(3)
+            End Get
+        End Property
+        Public Const RequiredDatabaseSchemaVersion As Integer = 16
         Public Const DefaultConnectionStringName As String = "StaffAutomationDb"
         Public Const DefaultLogFolderPath As String = "logs"
         Public Const DefaultAutoSaveIntervalSeconds As Integer = 60

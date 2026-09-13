@@ -93,7 +93,7 @@ Namespace Workflow
 
             _templates.Add("ROC Annual Filing", New TaskWorkflowTemplate With {
                 .TaskType = "ROC Annual Filing",
-                .CategoryCode = "STAT_AUDIT",
+                .CategoryCode = "ROC_FILING",
                 .Department = DepartmentType.Accounting,
                 .DefaultDueDateDays = 10,
                 .StandardSteps = New List(Of String) From {
@@ -148,21 +148,105 @@ Namespace Workflow
             Return _templates.Keys.ToList()
         End Function
 
-        Public Shared Function GetTemplate(taskType As String) As TaskWorkflowTemplate
-            If String.IsNullOrWhiteSpace(taskType) OrElse Not _templates.ContainsKey(taskType) Then
-                Return New TaskWorkflowTemplate With {
-                    .TaskType = If(String.IsNullOrWhiteSpace(taskType), "Other Task", taskType),
-                    .Department = DepartmentType.IncomeTax,
-                    .DefaultDueDateDays = 3,
-                    .StandardSteps = New List(Of String) From {
-                        "Review task instructions & scope",
-                        "Execute operational work steps",
-                        "Verify output with Senior Partner",
-                        "Mark task complete upon delivery"
-                    }
-                }
+        ''' <summary>
+        ''' 3-Tier Workflow Template Resolution Pipeline:
+        ''' Tier 1: Canonical CategoryCode / Identifier match
+        ''' Tier 2: Exact Display Name match
+        ''' Tier 3: Backward-compatibility string normalization fallback (prioritizes specific keywords over generic department names)
+        ''' </summary>
+        Public Shared Function GetTemplate(taskType As String, Optional canonicalCode As String = Nothing) As TaskWorkflowTemplate
+            Dim tier As String = ""
+            Return GetTemplateWithTier(taskType, canonicalCode, Nothing, tier)
+        End Function
+
+        Public Shared Function GetTemplateWithTier(taskType As String, canonicalCode As String, taskTitle As String, ByRef resolutionTier As String) As TaskWorkflowTemplate
+            ' Tier 1: Canonical CategoryCode Identifier Matching
+            If Not String.IsNullOrWhiteSpace(canonicalCode) Then
+                For Each tmpl In _templates.Values
+                    If String.Equals(tmpl.CategoryCode, canonicalCode.Trim(), StringComparison.OrdinalIgnoreCase) Then
+                        resolutionTier = "Tier 1: Canonical Code Match"
+                        Return tmpl
+                    End If
+                Next
             End If
-            Return _templates(taskType)
+
+            ' Also check if taskType itself is a canonical CategoryCode
+            If Not String.IsNullOrWhiteSpace(taskType) Then
+                For Each tmpl In _templates.Values
+                    If String.Equals(tmpl.CategoryCode, taskType.Trim(), StringComparison.OrdinalIgnoreCase) Then
+                        resolutionTier = "Tier 1: Canonical Code Match"
+                        Return tmpl
+                    End If
+                Next
+            End If
+
+            ' Tier 2: Exact Display Name Match
+            If Not String.IsNullOrWhiteSpace(taskType) AndAlso _templates.ContainsKey(taskType.Trim()) Then
+                resolutionTier = "Tier 2: Exact Display Name Match"
+                Return _templates(taskType.Trim())
+            End If
+            If Not String.IsNullOrWhiteSpace(taskTitle) AndAlso _templates.ContainsKey(taskTitle.Trim()) Then
+                resolutionTier = "Tier 2: Exact Display Name Match"
+                Return _templates(taskTitle.Trim())
+            End If
+
+            ' Tier 3: Backward-Compatibility String Normalization Fallback (combine title & taskType)
+            Dim combined As String = (If(taskTitle, "") & " " & If(taskType, "")).Trim().ToUpperInvariant()
+            Dim resolvedKey As String = String.Empty
+
+            If combined.Contains("STATUTORY AUDIT") OrElse combined.Contains("STAT AUDIT") Then
+                resolvedKey = "Statutory Audit"
+            ElseIf combined.Contains("INCOME TAX") OrElse combined.Contains("ITR") Then
+                resolvedKey = "Income Tax Return (ITR)"
+            ElseIf combined.Contains("GSTR-3B") OrElse combined.Contains("GSTR 3B") OrElse combined.Contains("3B") Then
+                resolvedKey = "GSTR-3B Filing"
+            ElseIf combined.Contains("GSTR-1") OrElse combined.Contains("GSTR 1") Then
+                resolvedKey = "GSTR-1 Filing"
+            ElseIf combined.Contains("TDS") OrElse combined.Contains("26Q") OrElse combined.Contains("27Q") Then
+                resolvedKey = "TDS Quarterly Return (26Q/27Q)"
+            ElseIf combined.Contains("GST AUDIT") OrElse combined.Contains("GST VERIFICATION") Then
+                resolvedKey = "GST Verification & Audit"
+            ElseIf combined.Contains("ROC") OrElse combined.Contains("AOC-4") OrElse combined.Contains("MGT-7") Then
+                resolvedKey = "ROC Annual Filing"
+            ElseIf combined.Contains("BOOKKEEPING") OrElse combined.Contains("ACCOUNTING") Then
+                resolvedKey = "Accounting & Bookkeeping"
+            ElseIf combined.Contains("ONBOARDING") Then
+                resolvedKey = "Client Onboarding"
+            End If
+
+            ' If canonicalCode was provided but Tier 1 failed to match, log explicit warning guard
+            If Not String.IsNullOrWhiteSpace(canonicalCode) Then
+                System.Diagnostics.Trace.TraceWarning($"[WorkflowCanonicalMappingError] CategoryCode='{canonicalCode}' was provided but failed Tier 1 resolution. Resolution fell back to '{resolutionTier}' for TaskType='{taskType}', TaskTitle='{taskTitle}'.")
+            End If
+
+            If Not String.IsNullOrEmpty(resolvedKey) AndAlso _templates.ContainsKey(resolvedKey) Then
+                resolutionTier = "Tier 3: String Normalization Fallback"
+                If Not String.IsNullOrWhiteSpace(canonicalCode) Then
+                    System.Diagnostics.Trace.TraceWarning($"[WorkflowCanonicalMappingError] CategoryCode='{canonicalCode}' was provided but failed Tier 1 resolution. Resolution fell back to '{resolutionTier}' (ResolvedKey='{resolvedKey}').")
+                End If
+                Return _templates(resolvedKey)
+            End If
+
+            ' Tier 4: Controlled Generic Fallback
+            resolutionTier = "Tier 4: Generic Fallback Template"
+            If Not String.IsNullOrWhiteSpace(canonicalCode) Then
+                System.Diagnostics.Trace.TraceWarning($"[WorkflowCanonicalMappingError] CategoryCode='{canonicalCode}' was provided but failed Tier 1 resolution. Resolution fell back to '{resolutionTier}'.")
+            End If
+            Return GetGenericDefaultTemplate(If(String.IsNullOrWhiteSpace(taskTitle), taskType, taskTitle))
+        End Function
+
+        Private Shared Function GetGenericDefaultTemplate(taskType As String) As TaskWorkflowTemplate
+            Return New TaskWorkflowTemplate With {
+                .TaskType = If(String.IsNullOrWhiteSpace(taskType), "Other Task", taskType),
+                .Department = DepartmentType.IncomeTax,
+                .DefaultDueDateDays = 3,
+                .StandardSteps = New List(Of String) From {
+                    "Review task instructions & scope",
+                    "Execute operational work steps",
+                    "Verify output with Senior Partner",
+                    "Mark task complete upon delivery"
+                }
+            }
         End Function
 
         ''' <summary>

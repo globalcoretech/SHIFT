@@ -23,6 +23,7 @@ Namespace Forms.Common
         Private _isHovered As Boolean = False
 
         Public Event SelectedIndexChangedCustom As EventHandler
+        Public Event SelectedIndexChanged As EventHandler
 
         Public Sub New()
             Me.DoubleBuffered = True
@@ -44,6 +45,7 @@ Namespace Forms.Common
 
             AddHandler cboInner.SelectedIndexChanged, Sub(s, e)
                                                           RaiseEvent SelectedIndexChangedCustom(Me, e)
+                                                          RaiseEvent SelectedIndexChanged(Me, e)
                                                       End Sub
 
             AddHandler cboInner.GotFocus, Sub(s, e)
@@ -63,6 +65,15 @@ Namespace Forms.Common
             Get
                 Return cboInner.Items
             End Get
+        End Property
+
+        Public Property DropDownStyle As ComboBoxStyle
+            Get
+                Return cboInner.DropDownStyle
+            End Get
+            Set(value As ComboBoxStyle)
+                cboInner.DropDownStyle = value
+            End Set
         End Property
 
         Public Property SelectedIndex As Integer

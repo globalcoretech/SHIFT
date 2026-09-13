@@ -13,8 +13,11 @@ Namespace Interfaces
         Function GetByPanAsync(panNumber As String) As Task(Of ClientEntity)
         Function GetByGstinAsync(gstin As String) As Task(Of ClientEntity)
         Function GetAllAsync(Optional department As Nullable(Of DepartmentType) = Nothing, Optional includeDeleted As Boolean = False) As Task(Of List(Of ClientEntity))
+        Function GetClientsByAssignedUserAsync(userId As Integer) As Task(Of List(Of ClientEntity))
         Function AddAsync(client As ClientEntity) As Task(Of Integer)
+        Function AddBulkAsync(clients As IEnumerable(Of ClientEntity)) As Task(Of Integer)
         Function UpdateAsync(client As ClientEntity) As Task(Of Boolean)
         Function SoftDeleteAsync(clientId As Integer, modifiedBy As Integer) As Task(Of Boolean)
+        Function ReactivateAsync(clientId As Integer, modifiedBy As Integer) As Task(Of Boolean)
     End Interface
 End Namespace

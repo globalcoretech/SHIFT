@@ -38,3 +38,11 @@ database/backups/
 # Application log files
 logs/
 *.log
+
+# Exclude documentation
+*.md
+diary/
+specs/
+
+# Exclude entire database folder
+database/

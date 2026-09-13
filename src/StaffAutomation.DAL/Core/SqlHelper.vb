@@ -19,6 +19,10 @@ Namespace Core
             _connectionFactory = connectionFactory
         End Sub
 
+        Public Function GetConnection() As IDbConnection Implements ISqlHelper.GetConnection
+            Return _connectionFactory.CreateConnection()
+        End Function
+
         Public Async Function ExecuteNonQueryAsync(commandText As String, parameters As IDbDataParameter(), Optional transaction As IDbTransaction = Nothing) As Task(Of Integer) Implements ISqlHelper.ExecuteNonQueryAsync
             Try
                 If transaction IsNot Nothing Then

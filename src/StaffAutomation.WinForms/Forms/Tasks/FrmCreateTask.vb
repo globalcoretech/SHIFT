@@ -126,6 +126,9 @@ Namespace Forms.Tasks
         End Class
 
         Public Sub New(taskService As ITaskManagementService, clientService As IClientService, userRepo As DAL.Interfaces.IUserRepository, appLogger As IAppLogger)
+            If clientService Is Nothing Then Throw New ArgumentNullException(NameOf(clientService), "IClientService dependency cannot be Nothing in FrmCreateTask.")
+            If taskService Is Nothing Then Throw New ArgumentNullException(NameOf(taskService), "ITaskManagementService dependency cannot be Nothing in FrmCreateTask.")
+
             _taskService = taskService
             _clientService = clientService
             _userRepo = userRepo
@@ -143,9 +146,8 @@ Namespace Forms.Tasks
             Me.SuspendLayout()
 
             ' Form Dimensions & Centered Modal Configuration
-            Me.Size = New Size(680, 740)
-            Me.MinimumSize = New Size(640, 700)
-            Me.MaximumSize = New Size(800, 850)
+            Me.Size = New Size(680, 700)
+            Me.MinimumSize = New Size(620, 480)
             Me.StartPosition = FormStartPosition.CenterParent
             Me.FormBorderStyle = FormBorderStyle.FixedDialog
             Me.MaximizeBox = False
@@ -428,10 +430,14 @@ Namespace Forms.Tasks
             pnlFormScroll.Controls.Add(cboClient)
             pnlFormScroll.Controls.Add(lblClientHeader)
 
-            ' Final Container Assembly
             Me.Controls.Add(pnlFormScroll)
             Me.Controls.Add(pnlFooter)
             Me.Controls.Add(pnlHeader)
+
+            ' Final Container Assembly
+            For Each ctrl In New Control() {cboClient, txtTaskTitle, cboTaskType, cboPriority, cboAssignee, txtDescription}
+                ThemeConstants.ApplyStandardInputStyle(ctrl)
+            Next
 
             Me.ResumeLayout(False)
         End Sub
@@ -464,19 +470,43 @@ Namespace Forms.Tasks
         ''' Asynchronously populates Clients and Staff dropdowns from authoritative service layer.
         ''' Resets form fields and dirty flags.
         ''' </summary>
+        Private _isInitialized As Boolean = False
+
+        ''' <summary>
+        ''' Asynchronously populates Clients and Staff dropdowns from authoritative service layer.
+        ''' Resets form fields and dirty flags.
+        ''' </summary>
         Public Async Function InitializeDataAsync() As System.Threading.Tasks.Task
+            If _isLoading OrElse _isInitialized Then Return
             _isLoading = True
+            _appLogger.LogInfo("[CreateTaskClientLoad] Starting client load", "FrmCreateTask")
+
             Try
-                ' 1. Load Active Clients
+                ' 1. Load Active Clients (Database Fetch Phase)
                 cboClient.Items.Clear()
                 cboClient.Items.Add("-- Select Client --")
+
+                Dim rawClients As List(Of ClientDto) = Nothing
                 If _clientService IsNot Nothing Then
-                    Dim clients = Await _clientService.GetAllClientsAsync(includeDeleted:=False)
-                    If clients IsNot Nothing Then
-                        For Each c As ClientDto In clients
-                            If c.IsActive Then
+                    Try
+                        _appLogger.LogInfo("[ClientDropdown] DB fetch started", "FrmCreateTask")
+                        rawClients = Await _clientService.GetAllClientsAsync(includeDeleted:=False)
+                        Dim sqlCount As Integer = If(rawClients IsNot Nothing, rawClients.Count, 0)
+                        _appLogger.LogInfo($"[ClientDropdown] Form received: {sqlCount} clients", "FrmCreateTask")
+                    Catch exDb As Exception
+                        _appLogger.LogError($"[CreateTaskClientLoad:DbError] Database query failed: {exDb.Message}", "FrmCreateTask", exDb)
+                        FrmInAppAlert.ShowModal(Me, "CLIENT FETCH ERROR", "Unable to load client list from database. " & exDb.Message, AlertType.ErrorAlert, actionText:="OK")
+                    End Try
+                End If
+
+                ' 2. UI Mapping & Dropdown Binding Phase
+                Try
+                    Dim mappedItems As New List(Of ClientComboItem)()
+                    If rawClients IsNot Nothing Then
+                        For Each c As ClientDto In rawClients
+                            If Not c.IsDeleted Then
                                 Dim gstinRef As String = If(Not String.IsNullOrEmpty(c.Gstin), c.Gstin, If(Not String.IsNullOrEmpty(c.PanNumber), c.PanNumber, c.ClientCode))
-                                cboClient.Items.Add(New ClientComboItem With {
+                                mappedItems.Add(New ClientComboItem With {
                                     .ClientId = c.ClientId,
                                     .ClientName = c.ClientName,
                                     .GstinOrPan = gstinRef
@@ -484,17 +514,27 @@ Namespace Forms.Tasks
                             End If
                         Next
                     End If
-                End If
-                cboClient.SelectedIndex = 0
 
-                ' 2. Load Active Staff Members
+                    If mappedItems.Count > 0 Then
+                        For Each item In mappedItems
+                            cboClient.Items.Add(item)
+                        Next
+                    End If
+
+                    _appLogger.LogInfo($"[ClientDropdown] ComboBox bound: {cboClient.Items.Count} items (1 header + {mappedItems.Count} clients)", "FrmCreateTask")
+                    cboClient.SelectedIndex = 0
+                Catch exUi As Exception
+                    _appLogger.LogError($"[CreateTaskClientLoad:UIError] UI dropdown binding failed: {exUi.Message}", "FrmCreateTask", exUi)
+                End Try
+
+                ' 3. Load Active Staff Members
                 cboAssignee.Items.Clear()
                 cboAssignee.Items.Add("-- Select Assignee --")
                 If _userRepo IsNot Nothing Then
                     Dim users = Await _userRepo.GetAllAsync()
                     If users IsNot Nothing Then
                         For Each u As UserEntity In users
-                            If u.IsActive Then
+                            If Not u.IsDeleted Then
                                 cboAssignee.Items.Add(New UserComboItem With {
                                     .UserId = u.UserId,
                                     .FullName = u.FullName
@@ -517,7 +557,7 @@ Namespace Forms.Tasks
                     cboAssignee.SelectedIndex = 1
                 End If
 
-                ' 3. Reset Fields and Smart Trackers
+                ' 4. Reset Fields and Smart Trackers
                 _isTitleManuallyEdited = False
                 _isPriorityManuallyOverridden = False
                 _isDescriptionManuallyEdited = False
@@ -531,13 +571,13 @@ Namespace Forms.Tasks
                     OnTaskTypeSelectionChanged(cboTaskType, EventArgs.Empty)
                 End If
 
-                ' Reset manual edit trackers after initial auto-population
                 _isTitleManuallyEdited = False
                 _isPriorityManuallyOverridden = False
                 _isDescriptionManuallyEdited = False
                 _isDirty = False
+                _isInitialized = True
             Catch ex As Exception
-                _appLogger.LogError($"Failed to initialize FrmCreateTask dropdowns: {ex.Message}")
+                _appLogger.LogError($"Failed to initialize FrmCreateTask dropdowns: {ex.Message}", "FrmCreateTask", ex)
             Finally
                 _isLoading = False
             End Try
@@ -787,6 +827,7 @@ Namespace Forms.Tasks
 
                 If newTaskId > 0 Then
                     _appLogger.LogInfo($"Successfully created Task ID {newTaskId} for Client '{clientItem.ClientName}'.", "FrmCreateTask")
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     _createdTaskId = newTaskId
                     _isDirty = False
 

@@ -12,6 +12,7 @@ Imports StaffAutomation.DAL.Configuration
 Imports StaffAutomation.DAL.Core
 Imports StaffAutomation.DAL.Repositories
 Imports StaffAutomation.WinForms.UIHelpers
+Imports StaffAutomation.Core.Enums
 
 Namespace Forms.Auth
     ''' <summary>
@@ -20,11 +21,13 @@ Namespace Forms.Auth
     Public Class FrmLogin
         Private ReadOnly _navigator As IViewNavigator
         Private ReadOnly _authService As IAuthService
+        Private ReadOnly _schemaCompatibilityService As ISchemaCompatibilityService
 
         Public Sub New(navigator As IViewNavigator)
             InitializeComponent()
             _navigator = navigator
             _authService = InitializeAuthService()
+            _schemaCompatibilityService = InitializeSchemaService()
         End Sub
 
         Private Sub FrmLogin_Load(sender As Object, e As EventArgs) Handles MyBase.Load
@@ -41,6 +44,7 @@ Namespace Forms.Auth
             AddHandler btnExit.MouseLeave, Sub(s, ev) btnExit.BackColor = Color.FromArgb(241, 245, 249)
 
             txtUsername.Focus()
+            lblVersion.Text = $"v{Core.Constants.AppConstants.AppVersion} Enterprise Build"
         End Sub
 
         Private Sub OnUsernameGotFocus(sender As Object, e As EventArgs)
@@ -70,7 +74,7 @@ Namespace Forms.Auth
         Private Async Sub btnLogin_Click(sender As Object, e As EventArgs) Handles btnLogin.Click
             errProvider.Clear()
 
-            Dim username As String = txtUsername.Text.Trim()
+            Dim username As String = txtUsername.Text.Trim().ToLower()
             Dim password As String = txtPassword.Text
 
             ' UI Field Validation
@@ -93,6 +97,34 @@ Namespace Forms.Auth
 
                 ' Delegate authentication to BLL Engine
                 Dim userDto = Await _authService.AuthenticateUserAsync(username, password)
+                
+                ' Set Global Context
+                CurrentUserContext.CurrentUser = userDto
+                
+                ' Schema Compatibility Check
+                Dim schemaStatus = Await _schemaCompatibilityService.EvaluateCompatibilityAsync()
+                
+                If schemaStatus = SchemaCompatibilityStatus.AppUpdateRequired Then
+                    Forms.Common.FrmInAppAlert.ShowModal(Me, "Application Update Required", "The database has been upgraded by an Administrator. Please update your application to continue.", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                    Application.Exit()
+                    Return
+                ElseIf schemaStatus = SchemaCompatibilityStatus.MigrationRequired OrElse schemaStatus = SchemaCompatibilityStatus.Unknown Then
+                    If userDto.Role = UserRole.Admin Then
+                        Forms.Common.FrmInAppAlert.ShowModal(Me, "Database Update Required", "A database update is required for this version of the application. Please contact your system administrator before continuing.", Forms.Common.AlertType.InfoAlert, actionText:="OK")
+                        ' For now, we allow the Admin to login, or we can just let them proceed but warn them.
+                        ' The requirements state: "Admin: May be informed that a database upgrade is required. BUT Do NOT implement the actual Admin migration workflow yet."
+                    Else
+                        Forms.Common.FrmInAppAlert.ShowModal(Me, "System Upgrade Required", "The system database requires an upgrade. Please contact an Administrator to perform the upgrade.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
+                        CurrentUserContext.ClearSession()
+                        Me.Cursor = Cursors.Default
+                        btnLogin.Enabled = True
+                        btnExit.Enabled = True
+                        txtPassword.Clear()
+                        txtPassword.Focus()
+                        Return
+                    End If
+                End If
+
                 Me.Cursor = Cursors.Default
 
                 ' Forced Password Change Workflow (H5 Requirement)
@@ -141,6 +173,20 @@ Namespace Forms.Auth
                         txtPassword.Focus()
                     End If
                 End Using
+            Catch ex As DevicePendingApprovalException
+                Me.Cursor = Cursors.Default
+                btnLogin.Enabled = True
+                btnExit.Enabled = True
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Device Pending Approval", ex.Message, Forms.Common.AlertType.InfoAlert, actionText:="OK")
+                txtPassword.Clear()
+                txtPassword.Focus()
+            Catch ex As DeviceAccessDeniedException
+                Me.Cursor = Cursors.Default
+                btnLogin.Enabled = True
+                btnExit.Enabled = True
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Device Access Denied", ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                txtPassword.Clear()
+                txtPassword.Focus()
             Catch ex As AuthenticationException
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
@@ -152,7 +198,8 @@ Namespace Forms.Auth
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Login Failure", "Unable to log in: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                System.IO.File.WriteAllText("E:\Staff automation\crash.log", ex.ToString())
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Login Failure", "A crash occurred during login. Full details written to E:\Staff automation\crash.log", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
                 txtPassword.Clear()
             End Try
         End Sub
@@ -180,8 +227,19 @@ Namespace Forms.Auth
             Dim hasher As New PasswordHasher()
             Dim appLogger As IAppLogger = New AppLogger(config)
             Dim auditLogger As New AuditLogger(sqlHelper)
+            Dim deviceRepo As DAL.Interfaces.IDeviceRepository = New DeviceRepository(sqlHelper)
+            Dim deviceService As Core.Interfaces.IDeviceService = New DeviceService(deviceRepo, userRepo)
 
-            Return New AuthService(userRepo, hasher, appLogger, auditLogger)
+            Return New AuthService(userRepo, hasher, appLogger, auditLogger, deviceService)
+        End Function
+
+        Private Function InitializeSchemaService() As ISchemaCompatibilityService
+            Dim config As IAppConfiguration = New AppConfiguration()
+            Dim connFactory As IDatabaseConnectionFactory = New DbConnectionFactory(config)
+            Dim sqlHelper As ISqlHelper = New SqlHelper(connFactory)
+            Dim schemaRepo As DAL.Interfaces.ISchemaVersionRepository = New SchemaVersionRepository(sqlHelper)
+            Dim appLogger As IAppLogger = New AppLogger(config)
+            Return New SchemaCompatibilityService(schemaRepo, appLogger)
         End Function
     End Class
 End Namespace

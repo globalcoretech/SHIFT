@@ -71,6 +71,40 @@ Namespace Services
             Return success
         End Function
 
+        Public Async Function CreateUserAsync(newUser As Core.Entities.UserEntity, currentUserId As Integer) As Task(Of Integer)
+            ' Duplicate username validation is usually handled by repository/DB, but we can rely on existing SQL exception catch or add check here
+            Dim newId = Await _userRepository.AddAsync(newUser)
+            If newId > 0 Then
+                _appLogger.LogInfo($"User account created successfully for user '{newUser.Username}'.", "UserService")
+                Await _auditLogger.LogAuditAsync(currentUserId, "USER_CREATE", "IdentityServices", $"Created user account {newUser.Username}.")
+            End If
+            Return newId
+        End Function
+
+        Public Async Function UpdateUserAsync(userToUpdate As Core.Entities.UserEntity, currentUserId As Integer) As Task(Of Boolean)
+            Dim originalUser = Await _userRepository.GetByIdAsync(userToUpdate.UserId)
+            If originalUser Is Nothing Then
+                Throw New BusinessException("User account not found.", "ERR_USER_NOT_FOUND")
+            End If
+
+            ' Self-Lockout Protection
+            If userToUpdate.UserId = currentUserId Then
+                If userToUpdate.Role <> originalUser.Role Then
+                    Throw New BusinessException("Security Violation: Users cannot modify their own role.", "ERR_SECURITY_SELF_ROLE_CHANGE")
+                End If
+                If userToUpdate.IsActive = False AndAlso originalUser.IsActive = True Then
+                    Throw New BusinessException("Security Violation: Users cannot deactivate their own account.", "ERR_SECURITY_SELF_DEACTIVATE")
+                End If
+            End If
+
+            Dim success = Await _userRepository.UpdateAsync(userToUpdate)
+            If success Then
+                _appLogger.LogInfo($"User account updated successfully for user ID {userToUpdate.UserId}.", "UserService")
+                Await _auditLogger.LogAuditAsync(currentUserId, "USER_UPDATE", "IdentityServices", $"Updated user account {userToUpdate.Username}.")
+            End If
+            Return success
+        End Function
+
         Private Function MapToDto(entity As Core.Entities.UserEntity) As UserDto
             Return New UserDto() With {
                 .UserId = entity.UserId,

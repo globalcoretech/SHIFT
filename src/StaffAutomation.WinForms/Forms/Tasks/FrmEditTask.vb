@@ -155,9 +155,8 @@ Namespace Forms.Tasks
             Me.SuspendLayout()
 
             ' Form Dimensions & Centered Modal Configuration
-            Me.Size = New Size(680, 780)
-            Me.MinimumSize = New Size(640, 720)
-            Me.MaximumSize = New Size(800, 850)
+            Me.Size = New Size(680, 720)
+            Me.MinimumSize = New Size(620, 500)
             Me.StartPosition = FormStartPosition.CenterParent
             Me.FormBorderStyle = FormBorderStyle.FixedDialog
             Me.MaximizeBox = False
@@ -476,6 +475,10 @@ Namespace Forms.Tasks
             Me.Controls.Add(pnlFooter)
             Me.Controls.Add(pnlHeader)
 
+            For Each ctrl In New Control() {cboClient, txtTaskTitle, cboTaskType, cboPriority, cboAssignee, txtDescription}
+                ThemeConstants.ApplyStandardInputStyle(ctrl)
+            Next
+
             Me.ResumeLayout(False)
         End Sub
 
@@ -556,7 +559,7 @@ Namespace Forms.Tasks
                     Dim clients = Await _clientService.GetAllClientsAsync(includeDeleted:=False)
                     If clients IsNot Nothing Then
                         For Each c As ClientDto In clients
-                            If c.IsActive OrElse c.ClientId = _loadedTask.ClientId Then
+                            If Not c.IsDeleted OrElse c.ClientId = _loadedTask.ClientId Then
                                 Dim gstinRef As String = If(Not String.IsNullOrEmpty(c.Gstin), c.Gstin, If(Not String.IsNullOrEmpty(c.PanNumber), c.PanNumber, c.ClientCode))
                                 cboClient.Items.Add(New ClientComboItem With {
                                     .ClientId = c.ClientId,
@@ -585,7 +588,7 @@ Namespace Forms.Tasks
                     Dim users = Await _userRepo.GetAllAsync()
                     If users IsNot Nothing Then
                         For Each u As UserEntity In users
-                            If u.IsActive OrElse u.UserId = _loadedTask.AssignedToUserId Then
+                            If Not u.IsDeleted OrElse u.UserId = _loadedTask.AssignedToUserId Then
                                 cboAssignee.Items.Add(New UserComboItem With {
                                     .UserId = u.UserId,
                                     .FullName = u.FullName
@@ -780,6 +783,7 @@ Namespace Forms.Tasks
 
                 If success Then
                     _appLogger.LogInfo($"Successfully updated Task ID {_taskId}.", "FrmEditTask")
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     _isDirty = False
                     Me.DialogResult = DialogResult.OK
                     Me.Close()

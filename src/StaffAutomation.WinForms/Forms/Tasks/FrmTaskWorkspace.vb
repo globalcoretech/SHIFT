@@ -1,31 +1,38 @@
 Imports System
 Imports System.Collections.Generic
+Imports System.Diagnostics
+Imports System.Drawing
+Imports System.Linq
 Imports System.Windows.Forms
 Imports StaffAutomation.BLL.Logging
 Imports StaffAutomation.BLL.Services
 Imports StaffAutomation.Core.Configuration
 Imports StaffAutomation.Core.DTOs
+Imports StaffAutomation.Core.Entities
 Imports StaffAutomation.Core.Enums
 Imports StaffAutomation.Core.Exceptions
 Imports StaffAutomation.Core.Interfaces
 Imports StaffAutomation.Core.Logging
 Imports StaffAutomation.Core.Security
+Imports StaffAutomation.Core.Workflow
 Imports StaffAutomation.DAL.Configuration
 Imports StaffAutomation.DAL.Core
 Imports StaffAutomation.DAL.Repositories
+Imports StaffAutomation.WinForms.Forms.Main
 
 Namespace Forms.Tasks
     ''' <summary>
-    ''' Employee Daily Task Workspace Form handling timer start/pause, discussion logging, and state machine updates.
+    ''' Lightweight Read-Only Admin Task Workflow Viewer.
+    ''' Displays task metadata (Title, Client, Department, Due Date, Category Code)
+    ''' and resolved ordered standard workflow steps with zero database writes.
     ''' </summary>
     Public Class FrmTaskWorkspace
+        Private ReadOnly _taskId As Integer
         Private ReadOnly _taskService As ITaskManagementService
-        Private ReadOnly _timelineService As ITimelineService
-        Private ReadOnly _discussionService As IDiscussionService
+        Private ReadOnly _appLogger As IAppLogger
         Private ReadOnly _mainShellHost As Forms.Main.FrmMainShell
-        Private _myTasks As List(Of TaskDto) = New List(Of TaskDto)()
-        Private _selectedTaskId As Integer = 0
-        Private _activeActivityId As Integer = 0
+
+        Private _currentTask As TaskDto = Nothing
 
         Public Sub New()
             Me.New(0, Nothing)
@@ -37,230 +44,160 @@ Namespace Forms.Tasks
 
         Public Sub New(initialTaskId As Integer, mainShellHost As Forms.Main.FrmMainShell)
             InitializeComponent()
-            _selectedTaskId = initialTaskId
+            _taskId = initialTaskId
             _mainShellHost = mainShellHost
+
             Dim config As IAppConfiguration = New AppConfiguration()
             Dim connFactory As IDatabaseConnectionFactory = New DbConnectionFactory(config)
             Dim sqlHelper As ISqlHelper = New SqlHelper(connFactory)
-            Dim appLogger As IAppLogger = New AppLogger(config)
+            _appLogger = New AppLogger(config)
             Dim auditLogger As New AuditLogger(sqlHelper)
+
             Dim taskRepo As DAL.Interfaces.ITaskRepository = New TaskRepository(sqlHelper)
+            Dim clientRepo As DAL.Interfaces.IClientRepository = New ClientRepository(sqlHelper)
+            Dim userRepo As DAL.Interfaces.IUserRepository = New UserRepository(sqlHelper)
             Dim activityRepo As DAL.Interfaces.ITaskActivityRepository = New TaskActivityRepository(sqlHelper)
-            Dim discussionRepo As DAL.Interfaces.IDiscussionRepository = New DiscussionRepository(sqlHelper)
             Dim workflowEngine As ITaskWorkflowEngine = New TaskWorkflowEngine()
 
-            _taskService = New TaskManagementService(taskRepo, workflowEngine, appLogger, auditLogger)
-            _timelineService = New TimelineService(activityRepo, taskRepo, workflowEngine, appLogger, auditLogger)
-            _discussionService = New DiscussionService(discussionRepo, taskRepo, appLogger, auditLogger)
+            _taskService = New TaskManagementService(taskRepo, workflowEngine, _appLogger, auditLogger, clientRepo, userRepo, activityRepo, connFactory)
+
+            _appLogger.LogInfo($"[TaskWorkflowViewer] Instantiated Admin Workflow Viewer for TaskId={_taskId}", "FrmTaskWorkspace")
         End Sub
 
         Private Sub btnBackToTasks_Click(sender As Object, e As EventArgs) Handles btnBackToTasks.Click
-            If _mainShellHost IsNot Nothing Then
-                _mainShellHost.NavigateToModule("Tasks")
-            Else
-                Me.Close()
-            End If
+            Me.Close()
         End Sub
 
         Private Async Sub FrmTaskWorkspace_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-            cboTargetStatus.DataSource = [Enum].GetValues(GetType(TaskWorkflowState))
-            cboCommType.DataSource = [Enum].GetValues(GetType(CommunicationType))
-            cboOutcome.DataSource = [Enum].GetValues(GetType(CommunicationOutcome))
-            Await RefreshMyTasksGridAsync()
+            Await LoadSingleTaskWorkspaceAsync()
         End Sub
 
-        Private Async Function RefreshMyTasksGridAsync() As System.Threading.Tasks.Task
+        Private Async Function LoadSingleTaskWorkspaceAsync() As System.Threading.Tasks.Task
+            If _taskId <= 0 Then
+                _appLogger.LogError($"[TaskWorkflowViewer] Invalid TaskId={_taskId} passed to Admin Workflow Viewer.", "FrmTaskWorkspace")
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Invalid Task Context", "Task ID is invalid or unspecified.", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                Me.Close()
+                Return
+            End If
+
             Try
                 Me.Cursor = Cursors.WaitCursor
-                Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
-                Dim userRole As UserRole = UserRole.Employee
-                If CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing Then
-                    userRole = CurrentUserContext.CurrentUser.Role
+                _appLogger.LogInfo($"[TaskWorkflowViewer] Loading task details for TaskId={_taskId}", "FrmTaskWorkspace")
+
+                ' Single Read Operation: Fetch exact TaskDto by TaskId
+                Dim sw As Stopwatch = Stopwatch.StartNew()
+                Try
+                    _currentTask = Await _taskService.GetTaskByIdAsync(_taskId)
+                    sw.Stop()
+                    _appLogger.LogInfo($"[TaskWorkflowViewer] Operation=GetTaskByIdAsync | TaskId={_taskId} | Succeeded=True | ElapsedMs={sw.ElapsedMilliseconds}", "FrmTaskWorkspace")
+                Catch exGetTask As Exception
+                    sw.Stop()
+                    _appLogger.LogError($"[TaskWorkflowViewer] Operation=GetTaskByIdAsync | TaskId={_taskId} | Succeeded=False | Exception={exGetTask.Message}", "FrmTaskWorkspace", exGetTask)
+                    Forms.Common.FrmInAppAlert.ShowModal(Me, "Database Error", $"Failed to load Task #{_taskId}: {exGetTask.Message}", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                    Return
+                End Try
+
+                If _currentTask Is Nothing Then
+                    _appLogger.LogError($"[TaskWorkflowViewer] TaskId={_taskId} not found in database.", "FrmTaskWorkspace")
+                    Forms.Common.FrmInAppAlert.ShowModal(Me, "Task Not Found", $"Task #{_taskId} could not be found in the system.", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                    Return
                 End If
 
-                ' Role-based task retrieval: Admin/Owner view active tasks across organization, Employee views assigned tasks
-                If userRole = UserRole.Admin OrElse userRole = UserRole.Owner Then
-                    _myTasks = Await _taskService.GetAllActiveTasksAsync()
-                Else
-                    _myTasks = Await _taskService.GetTasksForAssignedUserAsync(currentUserId)
+                ' TaskId Context Mismatch Validation
+                If _currentTask.TaskId <> _taskId Then
+                    _appLogger.LogError($"[TaskWorkflowViewer] TaskContextMismatch: RequestedTaskId={_taskId} != LoadedTaskId={_currentTask.TaskId}", "FrmTaskWorkspace")
+                    Forms.Common.FrmInAppAlert.ShowModal(Me, "Context Mismatch", "Task loading error: Loaded task context does not match request.", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                    Return
                 End If
 
-                If _myTasks Is Nothing Then _myTasks = New List(Of TaskDto)()
+                _appLogger.LogInfo($"[TaskWorkflowViewer] Loaded TaskId={_currentTask.TaskId} | Title='{_currentTask.Title}' | CategoryCode='{_currentTask.CategoryCode}' | Dept='{_currentTask.Department.ToString()}'", "FrmTaskWorkspace")
 
-                ' Guarantee Selected Task Context: If an authorized task was explicitly opened, load it even if assigned to another user
-                If _selectedTaskId > 0 AndAlso Not _myTasks.Exists(Function(t) t.TaskId = _selectedTaskId) Then
-                    Dim specificTask = Await _taskService.GetTaskByIdAsync(_selectedTaskId)
-                    If specificTask IsNot Nothing Then
-                        _myTasks.Insert(0, specificTask)
-                    End If
-                End If
+                ' Update Header & Metadata Summary Card UI
+                lblTitle.Text = $"Admin Task Workflow Viewer — {_currentTask.TaskCode}"
+                lblTaskHeaderTitle.Text = $"{_currentTask.TaskCode} — {_currentTask.Title}"
+                lblClientName.Text = $"Client: {If(String.IsNullOrWhiteSpace(_currentTask.ClientName), "--", _currentTask.ClientName)}"
+                lblDepartment.Text = $"Department: {_currentTask.Department.ToString()}"
+                lblDueDate.Text = $"Due Date: {_currentTask.TargetDueDate:yyyy-MM-dd}"
+                lblCategoryCode.Text = $"Category Code: {If(String.IsNullOrWhiteSpace(_currentTask.CategoryCode), "--", _currentTask.CategoryCode)}"
 
-                dgvMyTasks.DataSource = Nothing
-                dgvMyTasks.DataSource = _myTasks
+                ' Render Read-Only Workflow Checklist Steps for _currentTask
+                RenderWorkflowSteps(_currentTask)
 
-                If _selectedTaskId > 0 AndAlso _myTasks IsNot Nothing Then
-                    For i As Integer = 0 To dgvMyTasks.Rows.Count - 1
-                        Dim rowTask = TryCast(dgvMyTasks.Rows(i).DataBoundItem, TaskDto)
-                        If rowTask IsNot Nothing AndAlso rowTask.TaskId = _selectedTaskId Then
-                            dgvMyTasks.Rows(i).Selected = True
-                            dgvMyTasks.FirstDisplayedScrollingRowIndex = i
-                            UpdateWorkspaceTaskHeader(rowTask)
-                            Exit For
-                        End If
-                    Next
-                End If
             Catch ex As Exception
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Error", "Failed to load task workspace: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                _appLogger.LogError($"[TaskWorkflowViewer] LoadSingleTaskWorkspaceAsync failed for TaskId={_taskId}: {ex.Message}", "FrmTaskWorkspace", ex)
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Error", $"Failed to load task workflow viewer: {ex.Message}", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
             Finally
                 Me.Cursor = Cursors.Default
             End Try
         End Function
 
-        Private Sub dgvMyTasks_SelectionChanged(sender As Object, e As EventArgs) Handles dgvMyTasks.SelectionChanged
-            If dgvMyTasks.SelectedRows.Count > 0 Then
-                Dim row = dgvMyTasks.SelectedRows(0)
-                Dim task = CType(row.DataBoundItem, TaskDto)
-                If task IsNot Nothing Then
-                    _selectedTaskId = task.TaskId
-                    cboTargetStatus.SelectedItem = task.WorkflowState
-                    UpdateWorkspaceTaskHeader(task)
-                End If
-            End If
-        End Sub
-
-        Private Sub UpdateWorkspaceTaskHeader(task As TaskDto)
-            If task Is Nothing Then Return
-            lblTitle.Text = $"Task Workspace: {task.TaskCode} – {task.Title}"
-
-            ' Respect TaskWorkflowEngine immutability for terminal tasks
-            Dim isTerminal = (task.WorkflowState = TaskWorkflowState.Completed OrElse task.WorkflowState = TaskWorkflowState.Delivered OrElse task.WorkflowState = TaskWorkflowState.Closed OrElse task.WorkflowState = TaskWorkflowState.Cancelled)
-            btnStartTimer.Enabled = Not isTerminal
-            btnPauseTimer.Enabled = Not isTerminal
-            btnChangeStatus.Enabled = Not isTerminal
-            cboTargetStatus.Enabled = Not isTerminal
-        End Sub
-
-        Private Async Sub btnStartTimer_Click(sender As Object, e As EventArgs) Handles btnStartTimer.Click
-            If _selectedTaskId = 0 Then
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Selection Required", "Please select a task from your workspace to start timer.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
-                Return
-            End If
-
+        Private Sub RenderWorkflowSteps(task As TaskDto)
             Try
-                Me.Cursor = Cursors.WaitCursor
-                Dim currentUserId = 1
-                Dim currentRole As UserRole = UserRole.Employee
-                If CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing Then
-                    currentUserId = CurrentUserContext.CurrentUser.UserId
-                    currentRole = CurrentUserContext.CurrentUser.Role
+                pnlWorkflowStepsHost.Controls.Clear()
+                If task Is Nothing Then Return
+
+                Dim resolutionTier As String = ""
+                Dim tmpl = TaskWorkflowTemplateProvider.GetTemplateWithTier(task.TaskType, task.CategoryCode, task.Title, resolutionTier)
+
+                If tmpl IsNot Nothing Then
+                    lblWorkflowName.Text = $"Resolved Workflow: {tmpl.TaskType}"
+                    lblWorkflowTitle.Text = $"Workflow Template: {tmpl.TaskType} ({resolutionTier}) — Task #{task.TaskId}"
+                Else
+                    lblWorkflowName.Text = "Resolved Workflow: Standard Workflow"
+                    lblWorkflowTitle.Text = $"Workflow Steps — Task #{task.TaskId}"
                 End If
 
-                Dim currentTask = Await _taskService.GetTaskByIdAsync(_selectedTaskId)
-                If currentTask IsNot Nothing AndAlso currentTask.WorkflowState = TaskWorkflowState.Assigned Then
-                    If _taskService.CanAcceptTask(currentTask, currentUserId, currentRole) Then
-                        Await _taskService.AcceptTaskAsync(_selectedTaskId, currentTask.ModifiedOn)
-                    End If
+                If tmpl Is Nothing OrElse tmpl.StandardSteps Is Nothing OrElse tmpl.StandardSteps.Count = 0 Then
+                    Dim lblEmpty As New Label With {
+                        .Text = "No standard workflow steps defined for this task category.",
+                        .AutoSize = True,
+                        .ForeColor = Color.Gray,
+                        .Font = New Font("Segoe UI", 9.5!, FontStyle.Italic),
+                        .Margin = New Padding(10, 10, 10, 10)
+                    }
+                    pnlWorkflowStepsHost.Controls.Add(lblEmpty)
+                    Return
                 End If
 
-                _activeActivityId = Await _timelineService.StartTaskActivityTimerAsync(_selectedTaskId, TimeCategory.WorkTime, "Started active work")
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Timer Active", "Task timer started successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
-                Await RefreshMyTasksGridAsync()
-            Catch ex As BusinessException
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Timer Conflict", ex.Message, Forms.Common.AlertType.WarningAlert, actionText:="OK")
+                pnlWorkflowStepsHost.SuspendLayout()
+
+                For idx As Integer = 0 To tmpl.StandardSteps.Count - 1
+                    Dim stepNumber As Integer = idx + 1
+                    Dim rawStepText As String = tmpl.StandardSteps(idx)
+
+                    ' Read-Only Informational Step Panel
+                    Dim pnlStepRow As New Panel With {
+                        .Size = New Size(880, 36),
+                        .Margin = New Padding(4, 4, 4, 4),
+                        .BackColor = Color.FromArgb(248, 250, 252)
+                    }
+
+                    Dim lblStepBadge As New Label With {
+                        .Text = $"Step {stepNumber}",
+                        .Font = New Font("Segoe UI", 8.5!, FontStyle.Bold),
+                        .ForeColor = Color.FromArgb(30, 58, 138),
+                        .BackColor = Color.FromArgb(219, 234, 254),
+                        .Size = New Size(60, 22),
+                        .TextAlign = ContentAlignment.MiddleCenter,
+                        .Location = New Point(8, 7)
+                    }
+
+                    Dim lblStepContent As New Label With {
+                        .Text = rawStepText,
+                        .Font = New Font("Segoe UI", 9.5!, FontStyle.Regular),
+                        .ForeColor = Color.FromArgb(30, 41, 59),
+                        .AutoSize = True,
+                        .Location = New Point(78, 8)
+                    }
+
+                    pnlStepRow.Controls.Add(lblStepBadge)
+                    pnlStepRow.Controls.Add(lblStepContent)
+                    pnlWorkflowStepsHost.Controls.Add(pnlStepRow)
+                Next
+
+                pnlWorkflowStepsHost.ResumeLayout(True)
             Catch ex As Exception
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Error", "Failed to start timer: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
-            Finally
-                Me.Cursor = Cursors.Default
-            End Try
-        End Sub
-
-        Private Async Sub btnPauseTimer_Click(sender As Object, e As EventArgs) Handles btnPauseTimer.Click
-            If _activeActivityId = 0 Then
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "No Active Timer", "No active running timer was found for your session.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
-                Return
-            End If
-
-            Try
-                Me.Cursor = Cursors.WaitCursor
-                Await _timelineService.StopActiveTimerAsync(_activeActivityId)
-                _activeActivityId = 0
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Timer Paused", "Task timer paused successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
-                Await RefreshMyTasksGridAsync()
-            Catch ex As Exception
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Error", "Failed to pause timer: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
-            Finally
-                Me.Cursor = Cursors.Default
-            End Try
-        End Sub
-
-        Private Sub btnLogDiscussion_Click(sender As Object, e As EventArgs) Handles btnLogDiscussion.Click
-            If _selectedTaskId = 0 Then
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Selection Required", "Please select a task to log discussion.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
-                Return
-            End If
-            pnlDiscussion.Visible = Not pnlDiscussion.Visible
-        End Sub
-
-        Private Async Sub btnSubmitDiscussion_Click(sender As Object, e As EventArgs) Handles btnSubmitDiscussion.Click
-            errProvider.Clear()
-
-            If String.IsNullOrWhiteSpace(txtDiscNotes.Text) Then
-                errProvider.SetError(txtDiscNotes, "Discussion notes are required.")
-                Return
-            End If
-
-            Dim durationMinutes As Integer = 15
-            Integer.TryParse(txtDiscDuration.Text, durationMinutes)
-
-            Dim dto As New DiscussionDto() With {
-                .TaskId = _selectedTaskId,
-                .Channel = CType(cboCommType.SelectedItem, CommunicationType),
-                .Outcome = CType(cboOutcome.SelectedItem, CommunicationOutcome),
-                .DiscussionNotes = txtDiscNotes.Text.Trim(),
-                .DurationMinutes = durationMinutes
-            }
-
-            Try
-                Me.Cursor = Cursors.WaitCursor
-                Await _discussionService.LogDiscussionAsync(dto)
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Discussion Saved", "Discussion logged successfully.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
-
-                ' Automatically update status if Waiting for Client / Documents outcome selected
-                If dto.Outcome = CommunicationOutcome.WaitingForReply Then
-                    Await _taskService.TransitionTaskStateAsync(_selectedTaskId, TaskWorkflowState.WaitingForClient)
-                ElseIf dto.Outcome = CommunicationOutcome.DocumentsRequested Then
-                    Await _taskService.TransitionTaskStateAsync(_selectedTaskId, TaskWorkflowState.WaitingForDocuments)
-                End If
-
-                pnlDiscussion.Visible = False
-                txtDiscNotes.Text = String.Empty
-                Await RefreshMyTasksGridAsync()
-            Catch ex As Exception
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Error", "Failed to log discussion: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
-            Finally
-                Me.Cursor = Cursors.Default
-            End Try
-        End Sub
-
-        Private Async Sub btnChangeStatus_Click(sender As Object, e As EventArgs) Handles btnChangeStatus.Click
-            If _selectedTaskId = 0 Then
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Selection Required", "Please select a task to update status.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
-                Return
-            End If
-
-            Dim targetState = CType(cboTargetStatus.SelectedItem, TaskWorkflowState)
-
-            Try
-                Me.Cursor = Cursors.WaitCursor
-                Await _taskService.TransitionTaskStateAsync(_selectedTaskId, targetState)
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Status Updated", $"Task status successfully updated to '{targetState.ToString()}'.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
-                Await RefreshMyTasksGridAsync()
-            Catch ex As BusinessException
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Invalid State Transition", ex.Message, Forms.Common.AlertType.WarningAlert, actionText:="OK")
-            Catch ex As Exception
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Error", "Failed to update status: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
-            Finally
-                Me.Cursor = Cursors.Default
+                _appLogger.LogError($"[TaskWorkflowViewer] RenderWorkflowSteps failed for TaskId={task.TaskId}: {ex.Message}", "FrmTaskWorkspace", ex)
             End Try
         End Sub
     End Class

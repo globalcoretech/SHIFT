@@ -43,6 +43,17 @@ Namespace Services
             For Each e In entities
                 list.Add(MapToDto(e))
             Next
+            _appLogger.LogInfo($"[ClientDropdown] Service returned: {list.Count} clients", "ClientService")
+            Return list
+        End Function
+
+        Public Async Function GetClientsByAssignedUserAsync(userId As Integer) As Task(Of List(Of ClientDto)) Implements IClientService.GetClientsByAssignedUserAsync
+            Dim entities = Await _clientRepo.GetClientsByAssignedUserAsync(userId)
+            Dim list As New List(Of ClientDto)()
+            For Each e In entities
+                list.Add(MapToDto(e))
+            Next
+            _appLogger.LogInfo($"[ClientDropdown] Service returned: {list.Count} clients for user {userId}", "ClientService")
             Return list
         End Function
 
@@ -73,7 +84,8 @@ Namespace Services
                 End If
             End If
 
-            Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
+            If Not CurrentUserContext.IsAuthenticated Then Throw New UnauthorizedAccessException("User is not authenticated.")
+            Dim currentUserId = CurrentUserContext.CurrentUser.UserId
 
             Dim entity As New ClientEntity() With {
                 .ClientCode = clientDto.ClientCode.Trim().ToUpper(),
@@ -102,6 +114,41 @@ Namespace Services
             Return newId
         End Function
 
+        Public Async Function CreateClientsBulkAsync(clients As List(Of ClientDto)) As Task(Of Integer) Implements IClientService.CreateClientsBulkAsync
+            If Not CurrentUserContext.IsAuthenticated Then Throw New UnauthorizedAccessException("User is not authenticated.")
+            Dim currentUserId = CurrentUserContext.CurrentUser.UserId
+            Dim entities As New List(Of ClientEntity)()
+            For Each clientDto In clients
+                Dim entity As New ClientEntity() With {
+                    .ClientCode = clientDto.ClientCode.Trim().ToUpper(),
+                    .ClientName = clientDto.ClientName.Trim(),
+                    .ContactPerson = clientDto.ContactPerson,
+                    .Phone = clientDto.Phone,
+                    .Email = clientDto.Email,
+                    .Department = clientDto.Department,
+                    .Gstin = If(String.IsNullOrWhiteSpace(clientDto.Gstin), String.Empty, clientDto.Gstin.Trim().ToUpper()),
+                    .GstType = clientDto.GstType,
+                    .PanNumber = If(String.IsNullOrWhiteSpace(clientDto.PanNumber), String.Empty, clientDto.PanNumber.Trim().ToUpper()),
+                    .StateName = clientDto.StateName,
+                    .EntityType = clientDto.EntityType,
+                    .Address = clientDto.Address,
+                    .District = clientDto.District,
+                    .Pincode = clientDto.Pincode,
+                    .IsLiveApiData = clientDto.IsLiveApiData,
+                    .IsActive = clientDto.IsActive,
+                    .CreatedBy = currentUserId
+                }
+                entities.Add(entity)
+            Next
+
+            Dim count = Await _clientRepo.AddBulkAsync(entities)
+            
+            _appLogger.LogInfo($"Bulk inserted {count} clients.", "ClientService")
+            Await _auditLogger.LogAuditAsync(currentUserId, "CLIENT_BULK_CREATE", "ClientService", $"Bulk inserted {count} clients.")
+            
+            Return count
+        End Function
+
         Public Async Function UpdateClientAsync(clientDto As ClientDto) As Task(Of Boolean) Implements IClientService.UpdateClientAsync
             Dim existing = Await _clientRepo.GetByIdAsync(clientDto.ClientId)
             If existing Is Nothing Then
@@ -112,7 +159,8 @@ Namespace Services
             Dim nameVal = CommonValidators.ValidateRequired(clientDto.ClientName, "Client Name")
             If Not nameVal.IsValid Then Throw New ValidationException(nameVal.Errors(0), "ClientName")
 
-            Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
+            If Not CurrentUserContext.IsAuthenticated Then Throw New UnauthorizedAccessException("User is not authenticated.")
+            Dim currentUserId = CurrentUserContext.CurrentUser.UserId
 
             existing.ClientName = clientDto.ClientName.Trim()
             existing.ContactPerson = clientDto.ContactPerson
@@ -141,11 +189,24 @@ Namespace Services
         End Function
 
         Public Async Function SoftDeleteClientAsync(clientId As Integer) As Task(Of Boolean) Implements IClientService.SoftDeleteClientAsync
-            Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
+            If Not CurrentUserContext.IsAuthenticated Then Throw New UnauthorizedAccessException("User is not authenticated.")
+            Dim currentUserId = CurrentUserContext.CurrentUser.UserId
             Dim success = Await _clientRepo.SoftDeleteAsync(clientId, currentUserId)
             If success Then
                 _appLogger.LogInfo($"Client ID {clientId} archived.", "ClientService")
                 Await _auditLogger.LogAuditAsync(currentUserId, "CLIENT_ARCHIVE", "ClientService", $"Client ID {clientId} archived.")
+            End If
+
+            Return success
+        End Function
+
+        Public Async Function ReactivateClientAsync(clientId As Integer) As Task(Of Boolean) Implements IClientService.ReactivateClientAsync
+            If Not CurrentUserContext.IsAuthenticated Then Throw New UnauthorizedAccessException("User is not authenticated.")
+            Dim currentUserId = CurrentUserContext.CurrentUser.UserId
+            Dim success = Await _clientRepo.ReactivateAsync(clientId, currentUserId)
+            If success Then
+                _appLogger.LogInfo($"Client ID {clientId} reactivated.", "ClientService")
+                Await _auditLogger.LogAuditAsync(currentUserId, "CLIENT_REACTIVATE", "ClientService", $"Client ID {clientId} reactivated.")
             End If
 
             Return success

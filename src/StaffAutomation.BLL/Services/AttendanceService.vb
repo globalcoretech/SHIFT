@@ -21,12 +21,14 @@ Namespace Services
         Private ReadOnly _userRepo As IUserRepository
         Private ReadOnly _appLogger As IAppLogger
         Private ReadOnly _auditLogger As AuditLogger
+        Private ReadOnly _timelineService As ITimelineService
 
-        Public Sub New(attendanceRepo As IAttendanceRepository, userRepo As IUserRepository, appLogger As IAppLogger, auditLogger As AuditLogger)
+        Public Sub New(attendanceRepo As IAttendanceRepository, userRepo As IUserRepository, appLogger As IAppLogger, auditLogger As AuditLogger, Optional timelineService As ITimelineService = Nothing)
             _attendanceRepo = attendanceRepo
             _userRepo = userRepo
             _appLogger = appLogger
             _auditLogger = auditLogger
+            _timelineService = timelineService
         End Sub
 
         Public Async Function GetTodayAttendanceForUserAsync(userId As Integer) As Task(Of AttendanceDto) Implements IAttendanceService.GetTodayAttendanceForUserAsync
@@ -103,6 +105,14 @@ Namespace Services
                 Throw New BusinessException($"User ID {userId} has already clocked out for today at {existing.ClockOutTime.Value:hh:mm tt}.", "ERR_ATTENDANCE_ALREADY_CLOCKED_OUT")
             End If
 
+            If _timelineService IsNot Nothing Then
+                Try
+                    Await _timelineService.AutoPauseActiveTimerOnAttendanceEventAsync(userId, "Auto-paused on Attendance Clock-Out")
+                Catch ex As Exception
+                    _appLogger.LogError($"Failed to auto-pause active timer on ClockOut for User ID {userId}: {ex.Message}", "AttendanceService")
+                End Try
+            End If
+
             Dim now = DateTime.Now
             ' Office End Time: 06:30 PM (18:30), Grace Period: 15 mins -> Threshold: 06:15 PM (18:15)
             Dim earlyThreshold = New DateTime(now.Year, now.Month, now.Day, 18, 15, 0)
@@ -143,6 +153,14 @@ Namespace Services
             End If
             If existing.BreakStartTime.HasValue Then
                 Return True ' Already on lunch break
+            End If
+
+            If _timelineService IsNot Nothing Then
+                Try
+                    Await _timelineService.AutoPauseActiveTimerOnAttendanceEventAsync(userId, "Auto-paused on Attendance Break")
+                Catch ex As Exception
+                    _appLogger.LogError($"Failed to auto-pause active timer on LunchBreak for User ID {userId}: {ex.Message}", "AttendanceService")
+                End Try
             End If
 
             Dim now = DateTime.Now
@@ -240,7 +258,7 @@ Namespace Services
                     dto.BreakStartTime = rec.BreakStartTime
                     dto.TotalBreakMinutes = rec.TotalBreakMinutes
                     dto.TotalWorkingMinutes = rec.TotalWorkingMinutes
-                    dto.Status = rec.Status
+                    dto.Status = If(rec.Status, String.Empty)
                     dto.IsManuallyCorrected = rec.IsManuallyCorrected
                     dto.CorrectionReason = rec.CorrectionReason
                 End If
@@ -259,6 +277,8 @@ Namespace Services
 
             Dim success = Await _attendanceRepo.CorrectAttendanceByAdminAsync(
                 dto.AttendanceId,
+                dto.UserId,
+                dto.AttendanceDate,
                 dto.ClockInTime,
                 dto.ClockOutTime,
                 dto.TotalBreakMinutes,
@@ -296,7 +316,7 @@ Namespace Services
                 .TotalBreakMinutes = entity.TotalBreakMinutes,
                 .TotalWorkingMinutes = totalWorkingMin,
                 .BreakStartTime = entity.BreakStartTime,
-                .Status = entity.Status
+                .Status = If(entity.Status, String.Empty)
             }
         End Function
     End Class

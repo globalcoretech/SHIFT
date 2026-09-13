@@ -36,10 +36,13 @@ Namespace Forms.Attendance
     ''' </summary>
     Public Class AdminAttendanceBoardControl
         Inherits UserControl
+        Implements IPreloadableScreen
 
         Private ReadOnly _attendanceService As IAttendanceService
+        Private _activeNavigationToken As Long = 0
         Private ReadOnly _userRepo As DAL.Interfaces.IUserRepository
         Private ReadOnly _appLogger As IAppLogger
+        Private _isDateResetting As Boolean = False
 
         Private _overviewData As List(Of AdminAttendanceOverviewDto) = New List(Of AdminAttendanceOverviewDto)()
 
@@ -73,6 +76,7 @@ Namespace Forms.Attendance
         Private pnlGridBox As KryptonPanel
         Private lblGridHeader As Label
         Private dgvStaffBoard As DataGridView
+        Private lblEmptyState As Label
 
         Private ReadOnly tmrRefresh As Timer
 
@@ -90,10 +94,18 @@ Namespace Forms.Attendance
             tmrRefresh = New Timer() With {.Interval = 10000} ' Refresh live board every 10 sec
             AddHandler tmrRefresh.Tick, Async Sub(s, e) Await LoadBoardDataAsync()
 
-            InitializeComponent()
-            tmrRefresh.Start()
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
 
-            AddHandler Me.Load, Async Sub(s, e) Await LoadBoardDataAsync()
+            InitializeComponent()
+            ThemeConstants.EnableDoubleBuffering(pnlHeader)
+            ThemeConstants.EnableDoubleBuffering(pnlCardsHost)
+            ThemeConstants.EnableDoubleBuffering(pnlToolbar)
+            ThemeConstants.EnableDoubleBuffering(pnlGridBox)
+            ThemeConstants.EnableDoubleBuffering(dgvStaffBoard)
+
+            tmrRefresh.Start()
         End Sub
 
         Private Sub InitializeComponent()
@@ -121,8 +133,8 @@ Namespace Forms.Attendance
                 .Padding = New Padding(0, 0, 0, 8),
                 .Margin = New Padding(0, 0, 0, 12)
             }
-            pnlHeader.StateCommon.Color1 = Color.White
-            pnlHeader.StateCommon.Color2 = Color.White
+            pnlHeader.StateCommon.Color1 = ThemeConstants.PearlHeaderBackground
+            pnlHeader.StateCommon.Color2 = ThemeConstants.PearlHeaderBackground
 
             lblTitle = New Label() With {
                 .Text = "Admin Staff Attendance Monitoring Board",
@@ -305,7 +317,7 @@ Namespace Forms.Attendance
             }
             btnExportCsv.Values.Image = IconChar.FileCsv.ToBitmap(Color.FromArgb(30, 41, 59), 16)
 
-            AddHandler dtpAttendanceDate.ValueChanged, Async Sub(s, e) Await LoadBoardDataAsync()
+            AddHandler dtpAttendanceDate.ValueChanged, AddressOf dtpAttendanceDate_ValueChanged
             AddHandler cboDepartment.SelectedIndexChanged, Sub(s, e) ApplyBoardFilters()
             AddHandler txtSearch.TextChanged, Sub(s, e) ApplyBoardFilters()
             AddHandler cboStatusFilter.SelectedIndexChanged, Sub(s, e) ApplyBoardFilters()
@@ -372,6 +384,23 @@ Namespace Forms.Attendance
             AddHandler dgvStaffBoard.CellPainting, AddressOf dgvStaffBoard_CellPainting
             AddHandler dgvStaffBoard.CellContentClick, AddressOf dgvStaffBoard_CellContentClick
 
+            lblEmptyState = New Label() With {
+                .Text = "No attendance recorded.",
+                .Font = New Font(ThemeConstants.FontNameDefault, 11.0!, FontStyle.Italic),
+                .ForeColor = ThemeConstants.TextMuted,
+                .AutoSize = False,
+                .TextAlign = ContentAlignment.MiddleCenter,
+                .BackColor = Color.White,
+                .Visible = False
+            }
+            dgvStaffBoard.Controls.Add(lblEmptyState)
+            
+            AddHandler dgvStaffBoard.Resize, Sub(s, e)
+                                                 If lblEmptyState IsNot Nothing AndAlso lblEmptyState.Visible Then
+                                                     lblEmptyState.Bounds = New Rectangle(0, dgvStaffBoard.ColumnHeadersHeight, dgvStaffBoard.Width, dgvStaffBoard.Height - dgvStaffBoard.ColumnHeadersHeight)
+                                                 End If
+                                             End Sub
+
             pnlGridBox.Controls.Add(dgvStaffBoard)
             pnlGridBox.Controls.Add(lblGridHeader)
 
@@ -420,12 +449,34 @@ Namespace Forms.Attendance
             Await LoadBoardDataAsync()
         End Function
 
+        Private Async Sub dtpAttendanceDate_ValueChanged(sender As Object, e As EventArgs)
+            If Not _isDateResetting Then
+                Await LoadBoardDataAsync()
+            End If
+        End Sub
+
+        Public Async Function PreloadDataAsync(navigationToken As Long) As Task Implements IPreloadableScreen.PreloadDataAsync
+            _activeNavigationToken = navigationToken
+            _isDateResetting = True
+            Try
+                dtpAttendanceDate.Value = DateTime.Today
+            Finally
+                _isDateResetting = False
+            End Try
+            Await LoadBoardDataInternalAsync(navigationToken)
+        End Function
+
         Private Async Function LoadBoardDataAsync() As Task
+            Await LoadBoardDataInternalAsync(0)
+        End Function
+
+        Private Async Function LoadBoardDataInternalAsync(token As Long) As Task
             Try
                 Me.Cursor = Cursors.WaitCursor
                 Dim selDate = dtpAttendanceDate.Value.Date
 
                 _overviewData = Await _attendanceService.GetTodayStaffOverviewAsync(selDate)
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
                 ApplyBoardFilters()
             Catch ex As Exception
                 _appLogger.LogError($"Error loading admin attendance board: {ex.Message}", "AdminAttendanceBoardControl", ex)
@@ -441,34 +492,24 @@ Namespace Forms.Attendance
             Dim search = txtSearch.Text.Trim().ToLower()
             Dim selectedStatus = If(cboStatusFilter.SelectedItem IsNot Nothing, cboStatusFilter.SelectedItem.ToString(), "All Statuses")
 
-            Dim filtered = _overviewData.AsEnumerable()
+            Dim baseList = _overviewData.AsEnumerable()
 
             If selectedDept <> "-- All Depts --" AndAlso Not String.IsNullOrEmpty(selectedDept) Then
-                filtered = filtered.Where(Function(x) String.Equals(x.DepartmentName, selectedDept, StringComparison.OrdinalIgnoreCase))
+                baseList = baseList.Where(Function(x) String.Equals(x.DepartmentName, selectedDept, StringComparison.OrdinalIgnoreCase))
             End If
 
             If Not String.IsNullOrEmpty(search) Then
-                filtered = filtered.Where(Function(x) (x.StaffName IsNot Nothing AndAlso x.StaffName.ToLower().Contains(search)) OrElse (x.EmployeeCode IsNot Nothing AndAlso x.EmployeeCode.ToLower().Contains(search)))
+                baseList = baseList.Where(Function(x) (x.StaffName IsNot Nothing AndAlso x.StaffName.ToLower().Contains(search)) OrElse (x.EmployeeCode IsNot Nothing AndAlso x.EmployeeCode.ToLower().Contains(search)))
             End If
 
-            If selectedStatus <> "All Statuses" AndAlso Not String.IsNullOrEmpty(selectedStatus) Then
-                If selectedStatus = "Present" Then
-                    filtered = filtered.Where(Function(x) x.ClockInTime.HasValue)
-                ElseIf selectedStatus = "Late" Then
-                    filtered = filtered.Where(Function(x) x.Status.Contains("Late"))
-                Else
-                    filtered = filtered.Where(Function(x) String.Equals(x.LiveStateDisplay, selectedStatus, StringComparison.OrdinalIgnoreCase))
-                End If
-            End If
+            Dim baseListArray = baseList.ToList()
 
-            Dim list = filtered.ToList()
-
-            ' 1. Calculate Summary Cards & Exception Emphasis
-            Dim countPresent = list.Where(Function(x) x.ClockInTime.HasValue).Count()
-            Dim countWorking = list.Where(Function(x) x.LiveStateDisplay = "Working").Count()
-            Dim countBreak = list.Where(Function(x) x.LiveStateDisplay = "On Lunch Break").Count()
-            Dim countLate = list.Where(Function(x) x.Status.Contains("Late")).Count()
-            Dim countNotPunched = list.Where(Function(x) Not x.ClockInTime.HasValue).Count()
+            ' 1. Calculate Summary Cards & Exception Emphasis from base dataset (unaffected by status filter selection)
+            Dim countPresent = baseListArray.Where(Function(x) x.ClockInTime.HasValue).Count()
+            Dim countWorking = baseListArray.Where(Function(x) x.LiveStateDisplay = "Working").Count()
+            Dim countBreak = baseListArray.Where(Function(x) x.LiveStateDisplay = "On Lunch Break").Count()
+            Dim countLate = baseListArray.Where(Function(x) x.Status IsNot Nothing AndAlso x.Status.Contains("Late")).Count()
+            Dim countNotPunched = baseListArray.Where(Function(x) Not x.ClockInTime.HasValue).Count()
 
             cardPresent.Count = countPresent
             cardPresent.ValueText = countPresent.ToString()
@@ -489,6 +530,26 @@ Namespace Forms.Attendance
             cardNotPunched.Count = countNotPunched
             cardNotPunched.ValueText = countNotPunched.ToString()
             cardNotPunched.IsSelected = String.Equals(selectedStatus, "Not Punched In", StringComparison.OrdinalIgnoreCase)
+
+            ' 2. Filter Grid Rows based on selectedStatus
+            Dim filtered = baseList.Where(Function(x) x.AttendanceId.HasValue)
+
+            If selectedStatus <> "All Statuses" AndAlso Not String.IsNullOrEmpty(selectedStatus) Then
+                If selectedStatus = "Present" Then
+                    filtered = filtered.Where(Function(x) x.ClockInTime.HasValue)
+                ElseIf selectedStatus = "Late" Then
+                    filtered = filtered.Where(Function(x) x.Status IsNot Nothing AndAlso x.Status.Contains("Late"))
+                ElseIf selectedStatus = "Not Punched In" Then
+                    filtered = filtered.Where(Function(x) Not x.ClockInTime.HasValue)
+                Else
+                    filtered = filtered.Where(Function(x) String.Equals(x.LiveStateDisplay, selectedStatus, StringComparison.OrdinalIgnoreCase))
+                End If
+            End If
+
+            Dim list = filtered.ToList()
+
+            ' Update dynamic Date Badge in Header
+            lblLiveClock.Text = $"📅 Attendance Report Date: {dtpAttendanceDate.Value:dddd, dd MMM yyyy}"
 
             ' Dynamic Operational Summary Subtitle
             Dim attentionCount = countLate + countNotPunched
@@ -531,228 +592,237 @@ Namespace Forms.Attendance
                 dt.Rows.Add(item.UserId, attIdObj, item.EmployeeCode, item.StaffName, item.DepartmentName, pIn, pOut, brkStr, hrsStr, item.LiveStateDisplay, corrStr)
             Next
 
-            dgvStaffBoard.DataSource = dt
+            dgvStaffBoard.SuspendLayout()
+            Try
+                dgvStaffBoard.DataSource = dt
 
-            ' Configure Action Button Columns
-            If Not dgvStaffBoard.Columns.Contains("btnInspect") Then
-                Dim btnInspectCol As New DataGridViewButtonColumn() With {
-                    .Name = "btnInspect",
-                    .HeaderText = "Inspect",
-                    .Text = "Inspect",
-                    .UseColumnTextForButtonValue = True,
-                    .Width = 85
-                }
-                dgvStaffBoard.Columns.Add(btnInspectCol)
-            End If
+                ' Configure Action Button Columns
+                If Not dgvStaffBoard.Columns.Contains("btnInspect") Then
+                    Dim btnInspectCol As New DataGridViewButtonColumn() With {
+                        .Name = "btnInspect",
+                        .HeaderText = "Inspect",
+                        .Text = "Inspect",
+                        .UseColumnTextForButtonValue = True,
+                        .Width = 85
+                    }
+                    dgvStaffBoard.Columns.Add(btnInspectCol)
+                End If
 
-            If Not dgvStaffBoard.Columns.Contains("btnCorrect") Then
-                Dim btnCorrectCol As New DataGridViewButtonColumn() With {
-                    .Name = "btnCorrect",
-                    .HeaderText = "Action",
-                    .Text = "Correct",
-                    .UseColumnTextForButtonValue = True,
-                    .Width = 85
-                }
-                dgvStaffBoard.Columns.Add(btnCorrectCol)
-            End If
+                If Not dgvStaffBoard.Columns.Contains("btnCorrect") Then
+                    Dim btnCorrectCol As New DataGridViewButtonColumn() With {
+                        .Name = "btnCorrect",
+                        .HeaderText = "Action",
+                        .Text = "Correct",
+                        .UseColumnTextForButtonValue = True,
+                        .Width = 85
+                    }
+                    dgvStaffBoard.Columns.Add(btnCorrectCol)
+                End If
 
-            ' Hide ID columns from view
-            If dgvStaffBoard.Columns.Contains("UserId") Then dgvStaffBoard.Columns("UserId").Visible = False
-            If dgvStaffBoard.Columns.Contains("AttendanceId") Then dgvStaffBoard.Columns("AttendanceId").Visible = False
+                If Not dgvStaffBoard.Columns.Contains("btnResetToday") Then
+                    Dim btnResetCol As New DataGridViewButtonColumn() With {
+                        .Name = "btnResetToday",
+                        .HeaderText = "TEST: Reset",
+                        .Text = "TEST: Reset",
+                        .UseColumnTextForButtonValue = True,
+                        .Width = 95
+                    }
+                    dgvStaffBoard.Columns.Add(btnResetCol)
+                End If
 
-            ' Configure Priority-Balanced Hybrid Column Sizing Model
-            If dgvStaffBoard.Columns.Contains("Emp Code") Then
-                Dim col = dgvStaffBoard.Columns("Emp Code")
-                col.HeaderText = "Emp Code"
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 75
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("Staff Name") Then
-                Dim col = dgvStaffBoard.Columns("Staff Name")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
-                col.MinimumWidth = 140
-                col.FillWeight = 190
-            End If
-            If dgvStaffBoard.Columns.Contains("Department") Then
-                Dim col = dgvStaffBoard.Columns("Department")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
-                col.MinimumWidth = 110
-                col.FillWeight = 130
-            End If
-            If dgvStaffBoard.Columns.Contains("Punch In") Then
-                Dim col = dgvStaffBoard.Columns("Punch In")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 72
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("Punch Out") Then
-                Dim col = dgvStaffBoard.Columns("Punch Out")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 78
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("Break") Then
-                Dim col = dgvStaffBoard.Columns("Break")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 52
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("Working Hrs") Then
-                Dim col = dgvStaffBoard.Columns("Working Hrs")
-                col.HeaderText = "Working Hrs"
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 82
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("Status") Then
-                Dim col = dgvStaffBoard.Columns("Status")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 115
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("Corrected?") Then
-                Dim col = dgvStaffBoard.Columns("Corrected?")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 80
-                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-            End If
-            If dgvStaffBoard.Columns.Contains("btnInspect") Then
-                Dim col = dgvStaffBoard.Columns("btnInspect")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 76
-                col.Resizable = DataGridViewTriState.False
-            End If
-            If dgvStaffBoard.Columns.Contains("btnCorrect") Then
-                Dim col = dgvStaffBoard.Columns("btnCorrect")
-                col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                col.Width = 76
-                col.Resizable = DataGridViewTriState.False
-            End If
+                ' Hide ID columns from view
+                If dgvStaffBoard.Columns.Contains("UserId") Then dgvStaffBoard.Columns("UserId").Visible = False
+                If dgvStaffBoard.Columns.Contains("AttendanceId") Then dgvStaffBoard.Columns("AttendanceId").Visible = False
+
+                ' Configure Priority-Balanced Hybrid Column Sizing Model
+                If dgvStaffBoard.Columns.Contains("Emp Code") Then
+                    Dim col = dgvStaffBoard.Columns("Emp Code")
+                    col.HeaderText = "Emp Code"
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 75
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("Staff Name") Then
+                    Dim col = dgvStaffBoard.Columns("Staff Name")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
+                    col.MinimumWidth = 140
+                    col.FillWeight = 190
+                End If
+                If dgvStaffBoard.Columns.Contains("Department") Then
+                    Dim col = dgvStaffBoard.Columns("Department")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
+                    col.MinimumWidth = 110
+                    col.FillWeight = 130
+                End If
+                If dgvStaffBoard.Columns.Contains("Punch In") Then
+                    Dim col = dgvStaffBoard.Columns("Punch In")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 72
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("Punch Out") Then
+                    Dim col = dgvStaffBoard.Columns("Punch Out")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 78
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("Break") Then
+                    Dim col = dgvStaffBoard.Columns("Break")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 52
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("Working Hrs") Then
+                    Dim col = dgvStaffBoard.Columns("Working Hrs")
+                    col.HeaderText = "Working Hrs"
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 82
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("Status") Then
+                    Dim col = dgvStaffBoard.Columns("Status")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 115
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("Corrected?") Then
+                    Dim col = dgvStaffBoard.Columns("Corrected?")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 80
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End If
+                If dgvStaffBoard.Columns.Contains("btnInspect") Then
+                    Dim col = dgvStaffBoard.Columns("btnInspect")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 76
+                    col.Resizable = DataGridViewTriState.False
+                End If
+                If dgvStaffBoard.Columns.Contains("btnCorrect") Then
+                    Dim col = dgvStaffBoard.Columns("btnCorrect")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 76
+                    col.Resizable = DataGridViewTriState.False
+                End If
+                If dgvStaffBoard.Columns.Contains("btnResetToday") Then
+                    Dim col = dgvStaffBoard.Columns("btnResetToday")
+                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+                    col.Width = 85
+                    col.Resizable = DataGridViewTriState.False
+                End If
+
+                If list.Count = 0 Then
+                    If baseList.Where(Function(x) x.AttendanceId.HasValue).Count() = 0 Then
+                        lblEmptyState.Text = If(dtpAttendanceDate.Value.Date = DateTime.Today, "No attendance recorded for today.", $"No attendance recorded for {dtpAttendanceDate.Value:dd MMM yyyy}.")
+                    Else
+                        lblEmptyState.Text = "No records match the selected filters."
+                    End If
+                    lblEmptyState.Bounds = New Rectangle(0, dgvStaffBoard.ColumnHeadersHeight, dgvStaffBoard.Width, dgvStaffBoard.Height - dgvStaffBoard.ColumnHeadersHeight)
+                    lblEmptyState.Visible = True
+                    lblEmptyState.BringToFront()
+                Else
+                    lblEmptyState.Visible = False
+                End If
+            Finally
+                dgvStaffBoard.ResumeLayout(True)
+            End Try
         End Sub
 
         Private Sub dgvStaffBoard_CellPainting(sender As Object, e As DataGridViewCellPaintingEventArgs)
-            If e.ColumnIndex < 0 Then Return
+            Try
+                If e.ColumnIndex < 0 OrElse dgvStaffBoard.Columns Is Nothing OrElse e.ColumnIndex >= dgvStaffBoard.Columns.Count Then Return
 
-            ' Enforce 100% Uniform Solid Indigo Header Background across ALL Columns (#4F46E5)
-            If e.RowIndex = -1 Then
-                Using bgBrush As New SolidBrush(ThemeConstants.PrimaryAccent),
-                      textBrush As New SolidBrush(Color.White),
-                      sf As New StringFormat() With {
-                          .Alignment = If(dgvStaffBoard.Columns(e.ColumnIndex).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter, StringAlignment.Center, StringAlignment.Near),
-                          .LineAlignment = StringAlignment.Center,
-                          .FormatFlags = StringFormatFlags.NoWrap
-                      }
+                ' Enforce 100% Uniform Solid Indigo Header Background across ALL Columns (#4F46E5)
+                If e.RowIndex = -1 Then
+                    Using bgBrush As New SolidBrush(ThemeConstants.PrimaryAccent),
+                          textBrush As New SolidBrush(Color.White),
+                          sf As New StringFormat() With {
+                              .Alignment = If(dgvStaffBoard.Columns(e.ColumnIndex).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter, StringAlignment.Center, StringAlignment.Near),
+                              .LineAlignment = StringAlignment.Center,
+                              .FormatFlags = StringFormatFlags.NoWrap
+                          }
 
-                    e.Graphics.FillRectangle(bgBrush, e.CellBounds)
+                        e.Graphics.FillRectangle(bgBrush, e.CellBounds)
 
-                    ' Subtle bottom border for grid header separator
-                    Using linePen As New Pen(Color.FromArgb(67, 56, 202))
-                        e.Graphics.DrawLine(linePen, e.CellBounds.Left, e.CellBounds.Bottom - 1, e.CellBounds.Right, e.CellBounds.Bottom - 1)
+                        ' Subtle bottom border for grid header separator
+                        Using linePen As New Pen(Color.FromArgb(67, 56, 202))
+                            e.Graphics.DrawLine(linePen, e.CellBounds.Left, e.CellBounds.Bottom - 1, e.CellBounds.Right, e.CellBounds.Bottom - 1)
+                        End Using
+
+                        Dim headerText = dgvStaffBoard.Columns(e.ColumnIndex).HeaderText
+                        Dim headerFont = dgvStaffBoard.ColumnHeadersDefaultCellStyle.Font
+                        If headerFont Is Nothing Then headerFont = New Font(ThemeConstants.FontNameDefault, 9.5!, FontStyle.Bold)
+
+                        Dim textRect = New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y, e.CellBounds.Width - 8, e.CellBounds.Height)
+                        e.Graphics.DrawString(headerText, headerFont, textBrush, textRect, sf)
                     End Using
 
-                    Dim headerText = dgvStaffBoard.Columns(e.ColumnIndex).HeaderText
-                    Dim headerFont = dgvStaffBoard.ColumnHeadersDefaultCellStyle.Font
-                    If headerFont Is Nothing Then headerFont = New Font(ThemeConstants.FontNameDefault, 9.5!, FontStyle.Bold)
+                    e.Handled = True
+                    Return
+                End If
 
-                    Dim textRect = New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y, e.CellBounds.Width - 8, e.CellBounds.Height)
-                    e.Graphics.DrawString(headerText, headerFont, textBrush, textRect, sf)
-                End Using
+                Dim colName = dgvStaffBoard.Columns(e.ColumnIndex).Name
 
-                e.Handled = True
-                Return
-            End If
+                ' Custom styling for Emp Code and Department columns matching reference screenshot
+                If colName = "Emp Code" AndAlso e.Value IsNot Nothing Then
+                    e.CellStyle.ForeColor = ThemeConstants.PrimaryAccent '#4F46E5 Indigo
+                    e.CellStyle.Font = New Font(dgvStaffBoard.Font.FontFamily, 9.0!, FontStyle.Bold)
+                ElseIf colName = "Department" AndAlso e.Value IsNot Nothing Then
+                    e.CellStyle.ForeColor = ThemeConstants.PrimaryAccent '#4F46E5 Indigo
+                    e.CellStyle.Font = New Font(dgvStaffBoard.Font.FontFamily, 9.0!, FontStyle.Bold)
+                End If
 
-            Dim colName = dgvStaffBoard.Columns(e.ColumnIndex).Name
+                ' Custom status badge rendering matching reference screenshot
+                If colName = "Status" AndAlso e.Value IsNot Nothing Then
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
 
-            ' Custom styling for Emp Code and Department columns matching reference screenshot
-            If colName = "Emp Code" AndAlso e.Value IsNot Nothing Then
-                e.CellStyle.ForeColor = ThemeConstants.PrimaryAccent '#4F46E5 Indigo
-                e.CellStyle.Font = New Font(dgvStaffBoard.Font.FontFamily, 9.0!, FontStyle.Bold)
-            ElseIf colName = "Department" AndAlso e.Value IsNot Nothing Then
-                e.CellStyle.ForeColor = ThemeConstants.PrimaryAccent '#4F46E5 Indigo
-                e.CellStyle.Font = New Font(dgvStaffBoard.Font.FontFamily, 9.0!, FontStyle.Bold)
-            End If
+                    Dim statusText = e.Value.ToString()
+                    Dim bgCol As Color
+                    Dim textCol As Color
+                    Dim borderCol As Color
+                    Dim displayBadgeText As String = statusText
 
-            ' Custom status badge rendering matching reference screenshot
-            If colName = "Status" AndAlso e.Value IsNot Nothing Then
-                e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
+                    Select Case statusText
+                        Case "Working"
+                            bgCol = Color.FromArgb(236, 253, 245)     ' Emerald-50
+                            textCol = Color.FromArgb(4, 120, 87)       ' Emerald-700
+                            borderCol = Color.FromArgb(167, 243, 208)   ' Emerald-200
+                            displayBadgeText = "Working"
+                        Case "On Lunch Break"
+                            bgCol = Color.FromArgb(255, 251, 235)     ' Amber-50
+                            textCol = Color.FromArgb(180, 83, 9)       ' Amber-700
+                            borderCol = Color.FromArgb(253, 230, 138)   ' Amber-200
+                            displayBadgeText = "On Break"
+                        Case "Day Completed", "Completed"
+                            bgCol = Color.FromArgb(241, 245, 249)     ' Slate-100
+                            textCol = Color.FromArgb(51, 65, 85)       ' Slate-700
+                            borderCol = Color.FromArgb(203, 213, 225)   ' Slate-300
+                            displayBadgeText = "Completed"
+                        Case "Not Punched In", "Not Punched"
+                            bgCol = Color.FromArgb(254, 242, 242)     ' Red-50
+                            textCol = Color.FromArgb(220, 38, 38)      ' Red-600
+                            borderCol = Color.FromArgb(254, 202, 202)   ' Red-200
+                            displayBadgeText = "Not Punched"
+                        Case Else
+                            If statusText.Contains("Late") Then
+                                bgCol = Color.FromArgb(255, 247, 237) ' Orange-50
+                                textCol = Color.FromArgb(194, 65, 12)  ' Orange-700
+                                borderCol = Color.FromArgb(253, 186, 116)
+                                displayBadgeText = "Late"
+                            Else
+                                bgCol = Color.FromArgb(241, 245, 249)
+                                textCol = Color.FromArgb(51, 65, 85)
+                                borderCol = Color.FromArgb(203, 213, 225)
+                                displayBadgeText = statusText
+                            End If
+                    End Select
 
-                Dim statusText = e.Value.ToString()
-                Dim bgCol As Color
-                Dim textCol As Color
-                Dim borderCol As Color
-                Dim displayBadgeText As String = statusText
+                    Dim badgeWidth = Math.Min(e.CellBounds.Width - 12, 115)
+                    Dim badgeHeight = 24
+                    If badgeWidth < 20 OrElse badgeHeight < 10 OrElse e.CellBounds.Width < 25 Then
+                        e.Handled = False
+                        Return
+                    End If
 
-                Select Case statusText
-                    Case "Working"
-                        bgCol = Color.FromArgb(236, 253, 245)     ' Emerald-50
-                        textCol = Color.FromArgb(4, 120, 87)       ' Emerald-700
-                        borderCol = Color.FromArgb(167, 243, 208)   ' Emerald-200
-                        displayBadgeText = "Working"
-                    Case "On Lunch Break"
-                        bgCol = Color.FromArgb(255, 251, 235)     ' Amber-50
-                        textCol = Color.FromArgb(180, 83, 9)       ' Amber-700
-                        borderCol = Color.FromArgb(253, 230, 138)   ' Amber-200
-                        displayBadgeText = "On Break"
-                    Case "Day Completed", "Completed"
-                        bgCol = Color.FromArgb(241, 245, 249)     ' Slate-100
-                        textCol = Color.FromArgb(51, 65, 85)       ' Slate-700
-                        borderCol = Color.FromArgb(203, 213, 225)   ' Slate-300
-                        displayBadgeText = "Completed"
-                    Case "Not Punched In", "Not Punched"
-                        bgCol = Color.FromArgb(254, 242, 242)     ' Red-50
-                        textCol = Color.FromArgb(220, 38, 38)      ' Red-600
-                        borderCol = Color.FromArgb(254, 202, 202)   ' Red-200
-                        displayBadgeText = "Not Punched"
-                    Case Else
-                        If statusText.Contains("Late") Then
-                            bgCol = Color.FromArgb(255, 247, 237) ' Orange-50
-                            textCol = Color.FromArgb(194, 65, 12)  ' Orange-700
-                            borderCol = Color.FromArgb(253, 186, 116)
-                            displayBadgeText = "Late"
-                        Else
-                            bgCol = Color.FromArgb(241, 245, 249)
-                            textCol = Color.FromArgb(51, 65, 85)
-                            borderCol = Color.FromArgb(203, 213, 225)
-                            displayBadgeText = statusText
-                        End If
-                End Select
-
-                Dim badgeWidth = Math.Min(e.CellBounds.Width - 12, 115)
-                Dim badgeHeight = 24
-                Dim badgeRect As New Rectangle(
-                    e.CellBounds.X + (e.CellBounds.Width - badgeWidth) \ 2,
-                    e.CellBounds.Y + (e.CellBounds.Height - badgeHeight) \ 2,
-                    badgeWidth,
-                    badgeHeight
-                )
-
-                Using bgBrush As New SolidBrush(bgCol),
-                      borderPen As New Pen(borderCol),
-                      textBrush As New SolidBrush(textCol),
-                      sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
-
-                    Using path = GetRoundedRectPath(badgeRect, 6)
-                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
-                        e.Graphics.FillPath(bgBrush, path)
-                        e.Graphics.DrawPath(borderPen, path)
-                    End Using
-
-                    Using badgeFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
-                        e.Graphics.DrawString(displayBadgeText, badgeFont, textBrush, badgeRect, sf)
-                    End Using
-                End Using
-
-                e.Handled = True
-
-            ElseIf colName = "Corrected?" AndAlso e.Value IsNot Nothing Then
-                e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
-
-                Dim valStr = e.Value.ToString()
-                If valStr.Contains("Corrected") Then
-                    Dim badgeWidth = 82
-                    Dim badgeHeight = 22
                     Dim badgeRect As New Rectangle(
                         e.CellBounds.X + (e.CellBounds.Width - badgeWidth) \ 2,
                         e.CellBounds.Y + (e.CellBounds.Height - badgeHeight) \ 2,
@@ -760,9 +830,9 @@ Namespace Forms.Attendance
                         badgeHeight
                     )
 
-                    Using bgBrush As New SolidBrush(Color.FromArgb(224, 242, 254)),
-                          borderPen As New Pen(Color.FromArgb(125, 211, 252)),
-                          textBrush As New SolidBrush(Color.FromArgb(7, 89, 133)),
+                    Using bgBrush As New SolidBrush(bgCol),
+                          borderPen As New Pen(borderCol),
+                          textBrush As New SolidBrush(textCol),
                           sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
 
                         Using path = GetRoundedRectPath(badgeRect, 5)
@@ -772,78 +842,112 @@ Namespace Forms.Attendance
                         End Using
 
                         Using badgeFont As New Font(ThemeConstants.FontNameDefault, 8.0!, FontStyle.Bold)
-                            e.Graphics.DrawString("Corrected", badgeFont, textBrush, badgeRect, sf)
+                            e.Graphics.DrawString(displayBadgeText, badgeFont, textBrush, badgeRect, sf)
                         End Using
                     End Using
-                Else
-                    Using textBrush As New SolidBrush(Color.FromArgb(148, 163, 184)),
-                          sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
-                        e.Graphics.DrawString("—", dgvStaffBoard.Font, textBrush, e.CellBounds, sf)
-                    End Using
-                End If
 
-                e.Handled = True
+                    e.Handled = True
 
-            ElseIf colName = "btnInspect" Then
-                e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
+                ElseIf colName = "btnInspect" Then
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
 
-                ' Primary Action (Solid Indigo Button with FontAwesome Vector Search Icon)
-                Dim btnRect As New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 6, e.CellBounds.Width - 8, e.CellBounds.Height - 12)
-                Using bgBrush As New SolidBrush(ThemeConstants.PrimaryAccent),
-                      textBrush As New SolidBrush(Color.White)
+                    ' Primary Action (Solid Indigo Button with FontAwesome Vector Search Icon)
+                    Dim btnRect As New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 6, e.CellBounds.Width - 8, e.CellBounds.Height - 12)
+                    If btnRect.Width > 20 AndAlso btnRect.Height > 10 Then
+                        Using bgBrush As New SolidBrush(ThemeConstants.PrimaryAccent),
+                              textBrush As New SolidBrush(Color.White)
 
-                    Using path = GetRoundedRectPath(btnRect, 6)
-                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
-                        e.Graphics.FillPath(bgBrush, path)
-                    End Using
-
-                    Using iconBmp As Bitmap = IconChar.Search.ToBitmap(Color.White, 12)
-                        If iconBmp IsNot Nothing Then
-                            Using btnFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
-                                Dim textStr = "Inspect"
-                                Dim textSize = e.Graphics.MeasureString(textStr, btnFont)
-                                Dim totalW As Single = iconBmp.Width + 3 + textSize.Width
-                                Dim startX As Single = btnRect.X + (btnRect.Width - totalW) / 2.0!
-                                Dim iconY As Single = btnRect.Y + (btnRect.Height - iconBmp.Height) / 2.0!
-                                Dim textY As Single = btnRect.Y + (btnRect.Height - textSize.Height) / 2.0!
-
-                                e.Graphics.DrawImage(iconBmp, New PointF(startX, iconY))
-                                e.Graphics.DrawString(textStr, btnFont, textBrush, New PointF(startX + iconBmp.Width + 3, textY))
+                            Using path = GetRoundedRectPath(btnRect, 6)
+                                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
+                                e.Graphics.FillPath(bgBrush, path)
                             End Using
-                        End If
-                    End Using
-                End Using
 
-                e.Handled = True
+                            Using iconBmp As Bitmap = IconChar.Search.ToBitmap(Color.White, 12)
+                                If iconBmp IsNot Nothing Then
+                                    Using btnFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
+                                        Dim textStr = "Inspect"
+                                        Dim textSize = e.Graphics.MeasureString(textStr, btnFont)
+                                        Dim totalW As Single = iconBmp.Width + 3 + textSize.Width
+                                        Dim startX As Single = btnRect.X + (btnRect.Width - totalW) / 2.0!
+                                        Dim iconY As Single = btnRect.Y + (btnRect.Height - iconBmp.Height) / 2.0!
+                                        Dim textY As Single = btnRect.Y + (btnRect.Height - textSize.Height) / 2.0!
 
-            ElseIf colName = "btnCorrect" Then
-                e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
+                                        e.Graphics.DrawImage(iconBmp, New PointF(startX, iconY))
+                                        e.Graphics.DrawString(textStr, btnFont, textBrush, New PointF(startX + iconBmp.Width + 3, textY))
+                                    End Using
+                                End If
+                            End Using
+                        End Using
+                    End If
 
-                ' Secondary Action (Outline Slate Button)
-                Dim btnRect As New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 6, e.CellBounds.Width - 8, e.CellBounds.Height - 12)
-                Using bgBrush As New SolidBrush(Color.White),
-                      borderPen As New Pen(Color.FromArgb(203, 213, 225)),
-                      textBrush As New SolidBrush(Color.FromArgb(30, 41, 59)),
-                      sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
+                    e.Handled = True
 
-                    Using path = GetRoundedRectPath(btnRect, 6)
-                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
-                        e.Graphics.FillPath(bgBrush, path)
-                        e.Graphics.DrawPath(borderPen, path)
-                    End Using
+                ElseIf colName = "btnCorrect" Then
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
 
-                    Using btnFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
-                        e.Graphics.DrawString("Correct", btnFont, textBrush, btnRect, sf)
-                    End Using
-                End Using
+                    ' Secondary Action (Outline Slate Button)
+                    Dim btnRect As New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 6, e.CellBounds.Width - 8, e.CellBounds.Height - 12)
+                    If btnRect.Width > 20 AndAlso btnRect.Height > 10 Then
+                        Using bgBrush As New SolidBrush(Color.White),
+                              borderPen As New Pen(Color.FromArgb(203, 213, 225)),
+                              textBrush As New SolidBrush(Color.FromArgb(30, 41, 59)),
+                              sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
 
-                e.Handled = True
-            End If
+                            Using path = GetRoundedRectPath(btnRect, 6)
+                                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
+                                e.Graphics.FillPath(bgBrush, path)
+                                e.Graphics.DrawPath(borderPen, path)
+                            End Using
+
+                            Using btnFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
+                                e.Graphics.DrawString("Correct", btnFont, textBrush, btnRect, sf)
+                            End Using
+                        End Using
+                    End If
+
+                    e.Handled = True
+
+                ElseIf colName = "btnResetToday" Then
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
+
+                    ' Testing Action (Outline Red Button)
+                    Dim btnRect As New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 6, e.CellBounds.Width - 8, e.CellBounds.Height - 12)
+                    If btnRect.Width > 20 AndAlso btnRect.Height > 10 Then
+                        Using bgBrush As New SolidBrush(Color.White),
+                              borderPen As New Pen(Color.FromArgb(220, 38, 38)),
+                              textBrush As New SolidBrush(Color.FromArgb(220, 38, 38)),
+                              sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
+
+                            Using path = GetRoundedRectPath(btnRect, 6)
+                                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
+                                e.Graphics.FillPath(bgBrush, path)
+                                e.Graphics.DrawPath(borderPen, path)
+                            End Using
+
+                            Using btnFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
+                                e.Graphics.DrawString("TEST: Reset", btnFont, textBrush, btnRect, sf)
+                            End Using
+                        End Using
+                    End If
+
+                    e.Handled = True
+                End If
+            Catch ex As Exception
+                e.Handled = False
+            End Try
         End Sub
 
         Private Function GetRoundedRectPath(rect As Rectangle, radius As Integer) As System.Drawing.Drawing2D.GraphicsPath
             Dim path As New System.Drawing.Drawing2D.GraphicsPath()
-            Dim diameter = radius * 2
+            If rect.Width <= 0 OrElse rect.Height <= 0 OrElse radius <= 0 Then
+                path.AddRectangle(rect)
+                Return path
+            End If
+            Dim diameter = Math.Min(radius * 2, Math.Min(rect.Width, rect.Height))
+            If diameter <= 0 Then
+                path.AddRectangle(rect)
+                Return path
+            End If
             Dim arc As New Rectangle(rect.X, rect.Y, diameter, diameter)
 
             path.AddArc(arc, 180, 90)
@@ -862,30 +966,64 @@ Namespace Forms.Attendance
         End Function
 
         Private Async Sub dgvStaffBoard_CellContentClick(sender As Object, e As DataGridViewCellEventArgs)
-            If e.RowIndex < 0 Then Return
+            Try
+                If e.RowIndex < 0 OrElse e.ColumnIndex < 0 Then Return
+                If dgvStaffBoard.Columns Is Nothing OrElse e.ColumnIndex >= dgvStaffBoard.Columns.Count Then Return
+                If e.RowIndex >= dgvStaffBoard.Rows.Count Then Return
 
-            Dim colName = dgvStaffBoard.Columns(e.ColumnIndex).Name
-            Dim userId = Convert.ToInt32(dgvStaffBoard.Rows(e.RowIndex).Cells("UserId").Value)
-            Dim staffName = dgvStaffBoard.Rows(e.RowIndex).Cells("Staff Name").Value.ToString()
+                Dim colName = dgvStaffBoard.Columns(e.ColumnIndex).Name
+                Dim row = dgvStaffBoard.Rows(e.RowIndex)
 
-            If colName = "btnInspect" Then
-                Using dlg As New FrmStaffAttendanceDetail(userId, staffName, _attendanceService, _userRepo)
-                    dlg.ShowDialog(Me.FindForm())
-                End Using
-            ElseIf colName = "btnCorrect" Then
-                Dim attIdObj = dgvStaffBoard.Rows(e.RowIndex).Cells("AttendanceId").Value
-                Dim attId = If(attIdObj IsNot DBNull.Value AndAlso attIdObj IsNot Nothing, Convert.ToInt32(attIdObj), 0)
+                If row.Cells("UserId") Is Nothing OrElse row.Cells("UserId").Value Is Nothing OrElse row.Cells("UserId").Value Is DBNull.Value Then Return
+                Dim userId = Convert.ToInt32(row.Cells("UserId").Value)
 
-                Dim pInStr = dgvStaffBoard.Rows(e.RowIndex).Cells("Punch In").Value.ToString()
-                Dim pOutStr = dgvStaffBoard.Rows(e.RowIndex).Cells("Punch Out").Value.ToString()
-                Dim currStatus = dgvStaffBoard.Rows(e.RowIndex).Cells("Status").Value.ToString()
+                Dim staffNameVal = If(row.Cells("Staff Name") IsNot Nothing, row.Cells("Staff Name").Value, Nothing)
+                Dim staffName = If(staffNameVal IsNot Nothing AndAlso staffNameVal IsNot DBNull.Value, staffNameVal.ToString(), $"Staff #{userId}")
 
-                Using dlg As New FrmManualAttendanceCorrection(attId, userId, staffName, dtpAttendanceDate.Value.Date, pInStr, pOutStr, currStatus, _attendanceService)
-                    If dlg.ShowDialog(Me.FindForm()) = DialogResult.OK Then
-                        Await LoadBoardDataAsync()
+                If colName = "btnInspect" Then
+                    Using dlg As New FrmStaffAttendanceDetail(userId, staffName, _attendanceService, _userRepo)
+                        dlg.ShowDialog(Me.FindForm())
+                    End Using
+                ElseIf colName = "btnCorrect" Then
+                    Dim attIdObj = If(row.Cells("AttendanceId") IsNot Nothing, row.Cells("AttendanceId").Value, Nothing)
+                    Dim attId = If(attIdObj IsNot DBNull.Value AndAlso attIdObj IsNot Nothing, Convert.ToInt32(attIdObj), 0)
+
+                    Dim pInObj = If(row.Cells("Punch In") IsNot Nothing, row.Cells("Punch In").Value, Nothing)
+                    Dim pInStr = If(pInObj IsNot Nothing AndAlso pInObj IsNot DBNull.Value, pInObj.ToString(), "--")
+
+                    Dim pOutObj = If(row.Cells("Punch Out") IsNot Nothing, row.Cells("Punch Out").Value, Nothing)
+                    Dim pOutStr = If(pOutObj IsNot Nothing AndAlso pOutObj IsNot DBNull.Value, pOutObj.ToString(), "--")
+
+                    Dim statusObj = If(row.Cells("Status") IsNot Nothing, row.Cells("Status").Value, Nothing)
+                    Dim currStatus = If(statusObj IsNot Nothing AndAlso statusObj IsNot DBNull.Value, statusObj.ToString(), "Not Punched In")
+
+                    Using dlg As New FrmManualAttendanceCorrection(attId, userId, staffName, dtpAttendanceDate.Value.Date, pInStr, pOutStr, currStatus, _attendanceService)
+                        If dlg.ShowDialog(Me.FindForm()) = DialogResult.OK Then
+                            Await LoadBoardDataAsync()
+                        End If
+                    End Using
+                ElseIf colName = "btnResetToday" Then
+                    Dim confirmationMsg = $"This will permanently remove TODAY'S attendance record for this staff member." & vbCrLf & "This action is for testing only." & vbCrLf & vbCrLf & $"Reset today's attendance for {staffName}?"
+                    Dim parentForm = TryCast(Me.FindForm(), Form)
+                    Dim dr = Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Testing Utility: Confirm Reset", confirmationMsg, Forms.Common.AlertType.WarningAlert, actionText:="RESET TODAY", showCancel:=True, cancelText:="CANCEL")
+                    If dr = DialogResult.OK Then
+                        Try
+                            Me.Cursor = Cursors.WaitCursor
+                            Dim success = Await _attendanceService.ResetTodayAttendanceAsync(userId)
+                            If success Then
+                                Forms.Common.DataStateTracker.MarkAttendanceChanged()
+                                Await LoadBoardDataAsync()
+                            End If
+                        Catch ex As Exception
+                            Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Error", "Reset failed: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                        Finally
+                            Me.Cursor = Cursors.Default
+                        End Try
                     End If
-                End Using
-            End If
+                End If
+            Catch ex As Exception
+                _appLogger.LogError($"Error in board cell click: {ex.Message}", "AdminAttendanceBoardControl", ex)
+            End Try
         End Sub
 
         Private Sub btnExportCsv_Click(sender As Object, e As EventArgs)

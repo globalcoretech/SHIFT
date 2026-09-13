@@ -11,6 +11,7 @@ Namespace Forms.Main
     ''' </summary>
     Public Module ThemeConstants
         ' Header & Branding Palette
+        Public ReadOnly PearlHeaderBackground As Color = Color.FromArgb(245, 246, 248)  ' #F5F6F8 Luminous Pearl Color from Palette
         Public ReadOnly HeaderBackground As Color = Color.FromArgb(15, 23, 42)          ' #0F172A Dark Slate
         Public ReadOnly HeaderForeground As Color = Color.FromArgb(255, 255, 255)      ' White
         Public ReadOnly HeaderSubText As Color = Color.FromArgb(148, 163, 184)         ' #94A3B8
@@ -192,28 +193,27 @@ Namespace Forms.Main
         End Sub
 
         ''' <summary>
-        ''' Applies consistent hero page header styling across all module screens.
-        ''' Fixes text layer overlap by enforcing 20px left margin, 14px top title padding, and 46px subtitle vertical placement.
+        ''' Applies consistent Pearl top header styling across all module screens.
         ''' </summary>
         Public Sub ApplyHeaderStyle(headerPanel As Panel, titleLabel As Label, subtitleLabel As Label)
             If headerPanel IsNot Nothing Then
                 headerPanel.Dock = DockStyle.Top
                 headerPanel.Height = 84
-                headerPanel.BackColor = Color.FromArgb(30, 27, 75) '#1E1B4B Deep Indigo
+                headerPanel.BackColor = PearlHeaderBackground '#F5F6F8 Pearl Color from Palette
                 headerPanel.Padding = New Padding(20, 14, 20, 12)
                 headerPanel.Margin = New Padding(0, 0, 0, 10)
             End If
 
             If titleLabel IsNot Nothing Then
                 titleLabel.Font = New Font(FontNameDefault, 13.0!, FontStyle.Bold)
-                titleLabel.ForeColor = Color.White
+                titleLabel.ForeColor = TextPrimary '#0F172A
                 titleLabel.AutoSize = True
                 titleLabel.Location = New Point(20, 14)
             End If
 
             If subtitleLabel IsNot Nothing Then
                 subtitleLabel.Font = New Font(FontNameDefault, 8.5!, FontStyle.Regular)
-                subtitleLabel.ForeColor = Color.FromArgb(199, 210, 254) '#C7D2FE Light Indigo
+                subtitleLabel.ForeColor = TextSecondary '#475569
                 subtitleLabel.AutoSize = True
                 subtitleLabel.Location = New Point(20, 46)
             End If
@@ -241,11 +241,20 @@ Namespace Forms.Main
         End Sub
 
         ''' <summary>
-        ''' Applies consistent styling to standard WinForms input controls.
-        ''' Ensures dropdown arrows belong visually to ComboBox controls without detached gaps.
+        ''' Applies consistent styling to input controls.
+        ''' If control is a Krypton input control, delegates directly to ApplyKryptonInputStyle.
+        ''' For standard WinForms controls, applies matching SHIFT palette and typography.
         ''' </summary>
         Public Sub ApplyStandardInputStyle(ctrl As Control)
             If ctrl Is Nothing Then Return
+
+            ' If control is a Krypton control, preserve approved Krypton visual system
+            If TypeOf ctrl Is Krypton.Toolkit.KryptonTextBox OrElse
+               TypeOf ctrl Is Krypton.Toolkit.KryptonComboBox OrElse
+               TypeOf ctrl Is Krypton.Toolkit.KryptonDateTimePicker Then
+                ApplyKryptonInputStyle(ctrl)
+                Return
+            End If
 
             ctrl.Font = New Font(FontNameDefault, 9.0!, FontStyle.Regular)
             ctrl.BackColor = Color.White
@@ -312,6 +321,25 @@ Namespace Forms.Main
                     col.AutoSizeMode = DataGridViewAutoSizeColumnMode.NotSet
                 End If
             Next
+        End Sub
+
+        Public Sub EnableDoubleBuffering(ctrl As Control)
+            If ctrl Is Nothing Then Return
+            Try
+                ctrl.GetType().GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic Or System.Reflection.BindingFlags.Instance)?.SetValue(ctrl, True, Nothing)
+                
+                Dim setStyleMethod = ctrl.GetType().GetMethod("SetStyle", System.Reflection.BindingFlags.NonPublic Or System.Reflection.BindingFlags.Instance)
+                If setStyleMethod IsNot Nothing Then
+                    Dim styles As ControlStyles = ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer
+                    setStyleMethod.Invoke(ctrl, New Object() {styles, True})
+                End If
+                
+                Dim updateStylesMethod = ctrl.GetType().GetMethod("UpdateStyles", System.Reflection.BindingFlags.NonPublic Or System.Reflection.BindingFlags.Instance)
+                If updateStylesMethod IsNot Nothing Then
+                    updateStylesMethod.Invoke(ctrl, Nothing)
+                End If
+            Catch
+            End Try
         End Sub
 
         ''' <summary>

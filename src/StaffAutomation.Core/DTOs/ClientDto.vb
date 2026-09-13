@@ -12,7 +12,7 @@ Namespace DTOs
         Public Property ContactPerson As String = String.Empty
         Public Property Phone As String = String.Empty
         Public Property Email As String = String.Empty
-        Public Property Department As DepartmentType
+        Public Property Department As Nullable(Of DepartmentType)
         Public Property Gstin As String = String.Empty
         Public Property GstType As String = "Regular Monthly"
         Public Property PanNumber As String = String.Empty

@@ -263,7 +263,7 @@ Namespace Forms.Admin
 
                 Dim success = Await _firmService.SaveFirmProfileAsync(dto, currentUserId)
                 If success Then
-                    FrmInAppAlert.ShowModal(Me, "Success", "Firm Master Profile updated successfully.", AlertType.SuccessAlert)
+                    FrmInAppAlert.ShowModal(Me, "Profile Saved", "Firm profile updated successfully.", AlertType.SuccessAlert, actionText:="OK")
                     Me.DialogResult = DialogResult.OK
                     Me.Close()
                 Else

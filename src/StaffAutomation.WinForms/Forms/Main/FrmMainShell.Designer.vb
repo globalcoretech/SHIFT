@@ -24,11 +24,12 @@ Namespace Forms.Main
         Friend WithEvents statusStripShell As StatusStrip
         Friend WithEvents pnlHeader As Panel
         Friend WithEvents pnlNavigation As Panel
-        Friend WithEvents pnlWorkspace As Panel
+        Friend WithEvents pnlWorkspace As WorkspaceHostPanel
 
         ' Header Left Cluster Containers
         Friend WithEvents pnlHeaderLeftLogo As Panel
         Friend WithEvents lblHeaderLogo As Label
+        Friend WithEvents picHeaderLogo As PictureBox
         Friend WithEvents pnlHeaderTitleContainer As Panel
         Friend WithEvents lblHeaderAppName As Label
         Friend WithEvents lblHeaderBranch As Label
@@ -44,6 +45,9 @@ Namespace Forms.Main
         Friend WithEvents btnHeaderLogout As Button
         Friend WithEvents btnHeaderExit As Button
         Friend WithEvents tmrClock As Timer
+        Friend WithEvents lblHeaderAttendanceStatus As Label
+        Friend WithEvents btnHeaderAttendancePrimary As Button
+        Friend WithEvents btnHeaderAttendanceSecondary As Button
 
         ' Navigation Menu Controls
         Friend WithEvents pnlNavHeader As Panel
@@ -66,11 +70,12 @@ Namespace Forms.Main
             Me.statusStripShell = New StatusStrip()
             Me.pnlHeader = New Panel()
             Me.pnlNavigation = New Panel()
-            Me.pnlWorkspace = New Panel()
+            Me.pnlWorkspace = New WorkspaceHostPanel()
 
             ' Header Left Controls
             Me.pnlHeaderLeftLogo = New Panel()
             Me.lblHeaderLogo = New Label()
+            Me.picHeaderLogo = New PictureBox()
             Me.pnlHeaderTitleContainer = New Panel()
             Me.lblHeaderAppName = New Label()
             Me.lblHeaderBranch = New Label()
@@ -86,6 +91,9 @@ Namespace Forms.Main
             Me.btnHeaderLogout = New Button()
             Me.btnHeaderExit = New Button()
             Me.tmrClock = New Timer(Me.components)
+            Me.lblHeaderAttendanceStatus = New Label()
+            Me.btnHeaderAttendancePrimary = New Button()
+            Me.btnHeaderAttendanceSecondary = New Button()
 
             ' Nav Controls
             Me.pnlNavHeader = New Panel()
@@ -125,16 +133,18 @@ Namespace Forms.Main
             Me.pnlHeader.TabIndex = 0
 
             '
-            ' pnlHeaderRight (Dock Right, Width: 540px)
+            ' pnlHeaderRight (Dock Right, Auto-width approach)
             '
             Me.pnlHeaderRight.Controls.Add(Me.lblHeaderUser)
-            Me.pnlHeaderRight.Controls.Add(Me.lblHeaderRoleDept)
+            Me.pnlHeaderRight.Controls.Add(Me.lblHeaderAttendanceStatus)
+            Me.pnlHeaderRight.Controls.Add(Me.btnHeaderAttendancePrimary)
+            Me.pnlHeaderRight.Controls.Add(Me.btnHeaderAttendanceSecondary)
             Me.pnlHeaderRight.Controls.Add(Me.btnHeaderNotifications)
             Me.pnlHeaderRight.Controls.Add(Me.lblHeaderClock)
             Me.pnlHeaderRight.Controls.Add(Me.btnHeaderLogout)
             Me.pnlHeaderRight.Controls.Add(Me.btnHeaderExit)
             Me.pnlHeaderRight.Dock = DockStyle.Right
-            Me.pnlHeaderRight.Width = 540
+            Me.pnlHeaderRight.Width = 720
             Me.pnlHeaderRight.FlowDirection = FlowDirection.LeftToRight
             Me.pnlHeaderRight.Padding = New Padding(0, 16, 10, 5)
             Me.pnlHeaderRight.WrapContents = False
@@ -143,17 +153,40 @@ Namespace Forms.Main
             ' lblHeaderUser
             '
             Me.lblHeaderUser.AutoSize = True
-            Me.lblHeaderUser.Margin = New Padding(0, 4, 8, 0)
-            Me.lblHeaderUser.Text = "👤 System Administrator"
+            Me.lblHeaderUser.Margin = New Padding(0, 6, 8, 0)
+            Me.lblHeaderUser.Text = "👤 System Administrator | Role: Admin"
             Me.lblHeaderUser.Font = New Font(ThemeConstants.FontNameDefault, 8.75!, FontStyle.Bold)
+            
+            '
+            ' lblHeaderAttendanceStatus
+            '
+            Me.lblHeaderAttendanceStatus.AutoSize = True
+            Me.lblHeaderAttendanceStatus.Margin = New Padding(0, 6, 8, 0)
+            Me.lblHeaderAttendanceStatus.Text = "Not Punched In"
+            Me.lblHeaderAttendanceStatus.Font = New Font(ThemeConstants.FontNameDefault, 8.75!, FontStyle.Bold)
+            Me.lblHeaderAttendanceStatus.ForeColor = ThemeConstants.TextMuted
 
             '
-            ' lblHeaderRoleDept
+            ' btnHeaderAttendancePrimary
             '
-            Me.lblHeaderRoleDept.AutoSize = True
-            Me.lblHeaderRoleDept.Margin = New Padding(0, 6, 8, 0)
-            Me.lblHeaderRoleDept.Text = "Role: Admin | FY: 2026-27"
-            Me.lblHeaderRoleDept.Font = New Font(ThemeConstants.FontNameDefault, 8.0!, FontStyle.Regular)
+            Me.btnHeaderAttendancePrimary.Margin = New Padding(0, 0, 6, 0)
+            Me.btnHeaderAttendancePrimary.Size = New Size(85, 32)
+            Me.btnHeaderAttendancePrimary.Text = "Punch In"
+            Me.btnHeaderAttendancePrimary.FlatStyle = FlatStyle.Flat
+            Me.btnHeaderAttendancePrimary.Cursor = Cursors.Hand
+            Me.btnHeaderAttendancePrimary.BackColor = ThemeConstants.SuccessGreen
+            Me.btnHeaderAttendancePrimary.ForeColor = Color.White
+
+            '
+            ' btnHeaderAttendanceSecondary
+            '
+            Me.btnHeaderAttendanceSecondary.Margin = New Padding(0, 0, 8, 0)
+            Me.btnHeaderAttendanceSecondary.Size = New Size(85, 32)
+            Me.btnHeaderAttendanceSecondary.Text = "Punch Out"
+            Me.btnHeaderAttendanceSecondary.FlatStyle = FlatStyle.Flat
+            Me.btnHeaderAttendanceSecondary.Cursor = Cursors.Hand
+            Me.btnHeaderAttendanceSecondary.Visible = False
+
 
             '
             ' btnHeaderNotifications
@@ -193,15 +226,24 @@ Namespace Forms.Main
             '
             ' pnlHeaderLeftLogo (Dock Left, Width: 55px)
             '
+            Me.pnlHeaderLeftLogo.Controls.Add(Me.picHeaderLogo)
             Me.pnlHeaderLeftLogo.Controls.Add(Me.lblHeaderLogo)
             Me.pnlHeaderLeftLogo.Dock = DockStyle.Left
             Me.pnlHeaderLeftLogo.Width = 55
 
-            Me.lblHeaderLogo.Location = New Point(8, 12)
-            Me.lblHeaderLogo.Size = New Size(42, 42)
-            Me.lblHeaderLogo.Text = "CA"
+            ' picHeaderLogo (Approximately 40x40 logical pixels, Zoom mode)
+            Me.picHeaderLogo.Location = New Point(8, 15)
+            Me.picHeaderLogo.Size = New Size(40, 40)
+            Me.picHeaderLogo.SizeMode = PictureBoxSizeMode.Zoom
+            Me.picHeaderLogo.Visible = True
+
+            ' lblHeaderLogo (Neutral SHIFT text fallback if image cannot load)
+            Me.lblHeaderLogo.Location = New Point(6, 15)
+            Me.lblHeaderLogo.Size = New Size(44, 40)
+            Me.lblHeaderLogo.Text = "SHIFT"
             Me.lblHeaderLogo.TextAlign = ContentAlignment.MiddleCenter
-            Me.lblHeaderLogo.Font = New Font(ThemeConstants.FontNameDefault, 13.0!, FontStyle.Bold)
+            Me.lblHeaderLogo.Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold)
+            Me.lblHeaderLogo.Visible = False
 
             '
             ' pnlHeaderTitleContainer (Dock Left, Width: 360px)
@@ -226,7 +268,8 @@ Namespace Forms.Main
             '
             Me.pnlSearchContainer.Controls.Add(Me.txtGlobalSearchPlaceholder)
             Me.pnlSearchContainer.Dock = DockStyle.Left
-            Me.pnlSearchContainer.Width = 240
+            Me.pnlSearchContainer.Width = 20 ' Shrunk to hide since not implemented, saving space for widget
+            Me.pnlSearchContainer.Visible = False
 
             Me.txtGlobalSearchPlaceholder.Location = New Point(10, 20)
             Me.txtGlobalSearchPlaceholder.Size = New Size(210, 26)
@@ -312,7 +355,7 @@ Namespace Forms.Main
             Me.lblStatusFY.Text = "| FY: 2026-27"
 
             Me.lblStatusVersion.Name = "lblStatusVersion"
-            Me.lblStatusVersion.Text = "| Version: v1.0.0"
+            Me.lblStatusVersion.Text = "| Version:"
 
             Me.lblStatusMemory.Name = "lblStatusMemory"
             Me.lblStatusMemory.Text = "| Memory: 42.5 MB"

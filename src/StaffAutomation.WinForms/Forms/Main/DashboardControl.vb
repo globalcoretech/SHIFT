@@ -30,11 +30,16 @@ Namespace Forms.Main
     ''' </summary>
     Public Class DashboardControl
         Inherits UserControl
+        Implements IPreloadableScreen
 
         Private ReadOnly _mainShell As FrmMainShell
         Private ReadOnly _clientService As IClientService
         Private ReadOnly _taskService As ITaskManagementService
         Private ReadOnly _userService As UserService
+        Private _activeNavigationToken As Long = 0
+        Private _localTasksDataVersion As Long = 0
+        Private _localClientsDataVersion As Long = 0
+        Private _isDataLoaded As Boolean = False
 
         ' 1. Command Header
         Private pnlHeroHeader As Panel
@@ -123,9 +128,18 @@ Namespace Forms.Main
             tmrTicker = New Timer() With {.Interval = 4000}
             AddHandler tmrTicker.Tick, AddressOf tmrTicker_Tick
 
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
+
             InitializeComponent()
+            ThemeConstants.EnableDoubleBuffering(pnlHeroHeader)
+            ThemeConstants.EnableDoubleBuffering(pnlActionCenter)
+            ThemeConstants.EnableDoubleBuffering(pnlKpiContainer)
+            ThemeConstants.EnableDoubleBuffering(tableWorkspace)
+            ThemeConstants.EnableDoubleBuffering(dgvRecentTasks)
+
             tmrTicker.Start()
-            LoadLiveDashboardDataAsync()
         End Sub
 
         Private Sub InitializeComponent()
@@ -481,7 +495,7 @@ Namespace Forms.Main
             }
 
             btnCaughtUpCreateTask = New Forms.Common.ModernButton() With {
-                .Text = " + Create New Task",
+                .Text = " Create New Task",
                 .Image = IconChar.Plus.ToBitmap(Color.White, 14),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Primary,
                 .Size = New Size(170, 36),
@@ -515,7 +529,8 @@ Namespace Forms.Main
             pnlRightSideBox = New Panel() With {
                 .Dock = DockStyle.Fill,
                 .BackColor = Color.Transparent,
-                .Margin = New Padding(4, 0, 0, 0)
+                .Margin = New Padding(4, 0, 0, 0),
+                .AutoScroll = True
             }
 
             ' Quick Actions Box (Height: 220px - Structured 2x2 Grid)
@@ -727,18 +742,16 @@ Namespace Forms.Main
                 .Cursor = Cursors.Default
             }
 
-            ' Dynamic bounds safety check on resize: childControl.Bottom <= card.ClientSize.Height - 10
+            ' Dynamic Y-positioning to prevent DPI-scaling overlap
+            Dim localValLabel = valLabelRef
             Dim localActionLabel = actionLabelRef
-            Dim localSubLabel = lblS
-
-            AddHandler card.Resize, Sub(s, e)
-                                       If card.ClientSize.Height > 0 Then
-                                           Dim linkY = Math.Min(96, card.ClientSize.Height - 22)
-                                           Dim subY = linkY - 20
-                                           localActionLabel.Location = New Point(12, linkY)
-                                           localSubLabel.Location = New Point(12, subY)
-                                       End If
-                                   End Sub
+            AddHandler localValLabel.SizeChanged, Sub(s, e)
+                                                    lblS.Top = localValLabel.Bottom + 2
+                                                    localActionLabel.Top = lblS.Bottom + 4
+                                                End Sub
+            ' Trigger initial layout calculation
+            lblS.Top = localValLabel.Bottom + 2
+            localActionLabel.Top = lblS.Bottom + 4
 
             card.Controls.Add(actionLabelRef)
             card.Controls.Add(lblS)
@@ -784,7 +797,7 @@ Namespace Forms.Main
 
             Dim lblD As New Label() With {
                 .Text = description,
-                .Font = New Font(ThemeConstants.FontNameDefault, 7.5!, FontStyle.Regular),
+                .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Regular),
                 .ForeColor = ThemeConstants.TextSecondary,
                 .BackColor = Color.Transparent,
                 .Location = New Point(10, 40),
@@ -904,15 +917,31 @@ Namespace Forms.Main
         End Class
 
         ''' <summary>
-        ''' Authoritative Single-Data-Source Async Dashboard Loader.
-        ''' All components (Action Center, Work Counters, Data Health, Task Grid, Quick Actions, Recent Activity)
-        ''' derive strictly from actual live SQL database records. Zero hardcoded/demo contradiction.
+        ''' Preloads live dashboard metrics and feeds asynchronously off-screen.
         ''' </summary>
+        Public Async Function PreloadDataAsync(navigationToken As Long) As Task Implements IPreloadableScreen.PreloadDataAsync
+            _activeNavigationToken = navigationToken
+            If _isDataLoaded AndAlso _localTasksDataVersion = Forms.Common.DataStateTracker.TasksDataVersion AndAlso _localClientsDataVersion = Forms.Common.DataStateTracker.ClientsDataVersion Then
+                Return
+            End If
+            Await LoadLiveDashboardDataAsyncInternal(navigationToken)
+        End Function
+
         Public Async Sub LoadLiveDashboardDataAsync()
+            Await LoadLiveDashboardDataAsyncInternal(0)
+        End Sub
+
+        Private Async Function LoadLiveDashboardDataAsyncInternal(token As Long) As Task
             Try
                 ' Single Authoritative Source Queries
                 Dim clients = Await _clientService.GetAllClientsAsync()
                 Dim tasks = Await _taskService.GetAllTasksAsync(includeDeleted:=False)
+                
+                _localClientsDataVersion = Forms.Common.DataStateTracker.ClientsDataVersion
+                _localTasksDataVersion = Forms.Common.DataStateTracker.TasksDataVersion
+                _isDataLoaded = True
+
+                If token <> 0 AndAlso token <> _activeNavigationToken Then Return
 
                 Dim activeClients = If(clients IsNot Nothing, clients.FindAll(Function(c) c.IsActive AndAlso Not c.IsDeleted), New List(Of ClientDto)())
                 Dim activeTasks = If(tasks IsNot Nothing, tasks.FindAll(Function(t) t.WorkflowState <> TaskWorkflowState.Completed AndAlso t.WorkflowState <> TaskWorkflowState.Delivered AndAlso t.WorkflowState <> TaskWorkflowState.Closed AndAlso t.WorkflowState <> TaskWorkflowState.Cancelled), New List(Of TaskDto)())
@@ -1102,7 +1131,7 @@ Namespace Forms.Main
                 If lblOverdueVal IsNot Nothing Then lblOverdueVal.Text = "0"
                 If lblCompletedVal IsNot Nothing Then lblCompletedVal.Text = "0"
             End Try
-        End Sub
+        End Function
 
         Protected Overrides Sub Dispose(disposing As Boolean)
             If disposing Then

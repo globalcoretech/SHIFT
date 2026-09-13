@@ -160,8 +160,8 @@ Namespace Forms.Admin
             }
 
             btnHeaderBack = New KryptonButton() With {
-                .Text = "< Back to Administration",
-                .Size = New Size(175, 32),
+                .Text = "← Back to Settings",
+                .Size = New Size(160, 32),
                 .Margin = New Padding(0)
             }
             ThemeConstants.ApplyKryptonSecondaryButton(btnHeaderBack)
@@ -219,10 +219,10 @@ Namespace Forms.Admin
         ' =========================================================================
 
         Private Sub BuildRolePermissionsTab()
-            pnlRolesTop = New Panel() With {.Dock = DockStyle.Top, .Height = 245}
+            pnlRolesTop = New Panel() With {.Dock = DockStyle.Top, .Height = 135}
 
             Dim lblRoleHeading As New Label() With {
-                .Text = "ROLE PERMISSIONS WORKSPACE — Select a role card to configure organizational capabilities:",
+                .Text = "ROLE PERMISSIONS WORKSPACE — Select a role to configure organizational capabilities:",
                 .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold),
                 .ForeColor = ThemeConstants.TextPrimary,
                 .Dock = DockStyle.Top,
@@ -231,7 +231,7 @@ Namespace Forms.Admin
 
             pnlRoleCardsTable = New TableLayoutPanel() With {
                 .Dock = DockStyle.Top,
-                .Height = 165,
+                .Height = 75,
                 .ColumnCount = 3,
                 .RowCount = 1,
                 .Padding = New Padding(0, 4, 0, 4)
@@ -243,12 +243,12 @@ Namespace Forms.Admin
 
             lblActiveRoleBanner = New Label() With {
                 .Dock = DockStyle.Bottom,
-                .Height = 48,
-                .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold),
+                .Height = 32,
+                .Font = New Font(ThemeConstants.FontNameDefault, 8.5!, FontStyle.Bold),
                 .ForeColor = ThemeConstants.PrimaryAccent,
                 .BackColor = Color.FromArgb(240, 244, 255),
                 .Padding = New Padding(8, 6, 8, 6),
-                .Text = "YOU ARE CURRENTLY CONFIGURING: Loading..."
+                .Text = "CURRENTLY CONFIGURING: Loading..."
             }
 
             pnlRolesTop.Controls.Add(lblActiveRoleBanner)
@@ -310,7 +310,8 @@ Namespace Forms.Admin
                 .MultiSelect = False,
                 .AllowUserToAddRows = False,
                 .AllowUserToDeleteRows = False,
-                .AutoGenerateColumns = False
+                .AutoGenerateColumns = False,
+                .RowTemplate = New DataGridViewRow() With {.Height = 36}
             }
             ThemeConstants.ApplyModernGridStyle(dgvRolePerms)
 
@@ -318,7 +319,7 @@ Namespace Forms.Admin
             dgvRolePerms.Columns.Add(New DataGridViewTextBoxColumn() With {.Name = "colModule", .HeaderText = "Module", .ReadOnly = True, .Width = 160})
             dgvRolePerms.Columns.Add(New DataGridViewTextBoxColumn() With {.Name = "colName", .HeaderText = "Permission Name", .ReadOnly = True, .Width = 230})
             dgvRolePerms.Columns.Add(New DataGridViewTextBoxColumn() With {.Name = "colDesc", .HeaderText = "Human Description", .ReadOnly = True, .AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill})
-            dgvRolePerms.Columns.Add(New DataGridViewTextBoxColumn() With {.Name = "colCode", .HeaderText = "Code", .ReadOnly = True, .Width = 150})
+            dgvRolePerms.Columns.Add(New DataGridViewTextBoxColumn() With {.Name = "colCode", .HeaderText = "Code", .ReadOnly = True, .Width = 150, .Visible = False})
             dgvRolePerms.Columns.Add(New DataGridViewTextBoxColumn() With {.Name = "colId", .HeaderText = "ID", .Visible = False})
 
             AddHandler dgvRolePerms.CellValueChanged, Sub(s, e) OnRoleGridCellValueChanged(e)
@@ -642,16 +643,14 @@ Namespace Forms.Admin
                 Dim tblLayout As New TableLayoutPanel() With {
                     .Dock = DockStyle.Fill,
                     .ColumnCount = 1,
-                    .RowCount = 5,
+                    .RowCount = 3,
                     .Padding = New Padding(4, 0, 4, 4),
                     .BackColor = Color.Transparent
                 }
                 tblLayout.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100.0!))
                 tblLayout.RowStyles.Add(New RowStyle(SizeType.Absolute, 4.0!))   ' Accent line
-                tblLayout.RowStyles.Add(New RowStyle(SizeType.Absolute, 24.0!))  ' Title
-                tblLayout.RowStyles.Add(New RowStyle(SizeType.Absolute, 18.0!))  ' Subtitle
-                tblLayout.RowStyles.Add(New RowStyle(SizeType.Percent, 100.0!))  ' Flexible Description & Perm Summary
-                tblLayout.RowStyles.Add(New RowStyle(SizeType.Absolute, 28.0!))  ' Fixed Status badge area (28px)
+                tblLayout.RowStyles.Add(New RowStyle(SizeType.Absolute, 28.0!))  ' Title
+                tblLayout.RowStyles.Add(New RowStyle(SizeType.Percent, 100.0!))  ' Status badge area
 
                 Dim pnlAccent As New Panel() With {
                     .Dock = DockStyle.Fill,
@@ -659,36 +658,19 @@ Namespace Forms.Admin
                 }
 
                 Dim lblRName As New Label() With {
-                    .Text = rName.ToUpper(),
-                    .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold),
+                    .Text = $"{r.Icon} {rName.ToUpper()}",
+                    .Font = New Font(ThemeConstants.FontNameDefault, 10.0!, FontStyle.Bold),
                     .ForeColor = If(isSelected, ThemeConstants.PrimaryAccent, ThemeConstants.TextPrimary),
                     .Dock = DockStyle.Fill,
-                    .TextAlign = ContentAlignment.MiddleLeft,
-                    .AutoEllipsis = True
-                }
-
-                Dim lblRSub As New Label() With {
-                    .Text = subTitle,
-                    .Font = New Font(ThemeConstants.FontNameDefault, 7.0!, FontStyle.Bold),
-                    .ForeColor = If(isSelected, ThemeConstants.PrimaryAccent, ThemeConstants.TextMuted),
-                    .Dock = DockStyle.Fill,
-                    .TextAlign = ContentAlignment.MiddleLeft,
-                    .AutoEllipsis = True
-                }
-
-                Dim lblRDesc As New Label() With {
-                    .Text = permSummary & vbCrLf & rDesc,
-                    .Font = New Font(ThemeConstants.FontNameDefault, 7.5!, FontStyle.Regular),
-                    .ForeColor = ThemeConstants.TextSecondary,
-                    .Dock = DockStyle.Fill,
+                    .TextAlign = ContentAlignment.MiddleCenter,
                     .AutoEllipsis = True
                 }
 
                 Dim lblStatusBadge As New Label() With {
-                    .Text = If(isSelected, "CURRENTLY CONFIGURING", "CLICK TO CONFIGURE"),
+                    .Text = If(isSelected, "SELECTED", "CLICK TO SELECT"),
                     .Font = New Font(ThemeConstants.FontNameDefault, 7.5!, FontStyle.Bold),
                     .ForeColor = If(isSelected, Color.FromArgb(67, 56, 202), Color.FromArgb(100, 116, 139)),
-                    .BackColor = If(isSelected, Color.FromArgb(224, 231, 255), Color.FromArgb(241, 245, 249)),
+                    .BackColor = If(isSelected, Color.FromArgb(224, 231, 255), Color.Transparent),
                     .Dock = DockStyle.Fill,
                     .TextAlign = ContentAlignment.MiddleCenter,
                     .AutoEllipsis = True
@@ -696,9 +678,7 @@ Namespace Forms.Admin
 
                 tblLayout.Controls.Add(pnlAccent, 0, 0)
                 tblLayout.Controls.Add(lblRName, 0, 1)
-                tblLayout.Controls.Add(lblRSub, 0, 2)
-                tblLayout.Controls.Add(lblRDesc, 0, 3)
-                tblLayout.Controls.Add(lblStatusBadge, 0, 4)
+                tblLayout.Controls.Add(lblStatusBadge, 0, 2)
 
                 card.Controls.Add(tblLayout)
 
@@ -706,8 +686,6 @@ Namespace Forms.Admin
                 AddHandler tblLayout.Click, Async Sub(s, e) Await SelectRoleAsync(rId)
                 AddHandler pnlAccent.Click, Async Sub(s, e) Await SelectRoleAsync(rId)
                 AddHandler lblRName.Click, Async Sub(s, e) Await SelectRoleAsync(rId)
-                AddHandler lblRSub.Click, Async Sub(s, e) Await SelectRoleAsync(rId)
-                AddHandler lblRDesc.Click, Async Sub(s, e) Await SelectRoleAsync(rId)
                 AddHandler lblStatusBadge.Click, Async Sub(s, e) Await SelectRoleAsync(rId)
 
                 pnlRoleCardsTable.Controls.Add(card, i, 0)
@@ -792,7 +770,7 @@ Namespace Forms.Admin
                 affectedUsersCount = _allUsers.FindAll(Function(u) u.Role = targetRoleEnum AndAlso u.IsActive).Count
             End If
 
-            lblActiveRoleBanner.Text = $"YOU ARE CURRENTLY CONFIGURING: {rIcon} {rName.ToUpper()}" & vbCrLf & $"Changes made here will affect all users assigned to the {rName} role.  •  Users Affected: {affectedUsersCount} active users currently inherit this role."
+            lblActiveRoleBanner.Text = $"CURRENTLY CONFIGURING: {rIcon} {rName.ToUpper()}   |   Changes affect {affectedUsersCount} active users inheriting this role."
             lblProfileHeader.Text = $"{rName.ToUpper()} ACCESS PROFILE — {_currentRolePermIds.Count} of {_allPerms.Count} permissions currently granted"
 
             Dim changesCount = 0
@@ -1007,7 +985,7 @@ Namespace Forms.Admin
                     parentShell = TryCast(Me.Parent.FindForm(), FrmMainShell)
                 End If
                 If parentShell IsNot Nothing Then
-                    parentShell.NavigateToModule("Admin")
+                    parentShell.NavigateToModule("Settings")
                 Else
                     Me.Close()
                 End If

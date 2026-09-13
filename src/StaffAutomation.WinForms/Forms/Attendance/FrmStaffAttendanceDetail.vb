@@ -9,7 +9,6 @@ Imports System.Drawing.Drawing2D
 Imports System.Threading.Tasks
 Imports System.Windows.Forms
 Imports FontAwesome.Sharp
-Imports Krypton.Toolkit
 Imports StaffAutomation.BLL.Interfaces
 Imports StaffAutomation.BLL.Services
 Imports StaffAutomation.Core.Configuration
@@ -21,13 +20,13 @@ Imports StaffAutomation.WinForms.UIHelpers
 
 Namespace Forms.Attendance
     ''' <summary>
-    ''' Modal Inspection Dashboard Form inheriting KryptonForm and using Krypton Toolkit controls
-    ''' with FontAwesome.Sharp vector icons.
+    ''' Modal Inspection Dashboard Form inheriting standard System.Windows.Forms.Form
+    ''' with FontAwesome.Sharp vector icons and clean, exception-free WinForms layout panels.
     ''' Allows Admin to view an individual staff member's detailed workday progress,
     ''' semantic status hero banner, compact metric cards, and complete monthly history grid.
     ''' </summary>
     Public Class FrmStaffAttendanceDetail
-        Inherits KryptonForm
+        Inherits Form
 
         Private ReadOnly _targetUserId As Integer
         Private ReadOnly _staffName As String
@@ -36,17 +35,17 @@ Namespace Forms.Attendance
         Private ReadOnly _policyEngine As IAttendancePolicyEngine
         Private ReadOnly _policyProvider As IPolicyProvider
 
-        ' Krypton UI Layout Containers & Controls
-        Private pnlHeader As KryptonPanel
+        ' Standard WinForms UI Layout Containers & Controls
+        Private pnlHeader As Panel
         Private lblStaffName As Label
         Private lblMetaId As Label
-        Private btnCloseHeader As KryptonButton
+        Private btnCloseHeader As Button
 
-        Private pnlHeroBanner As KryptonPanel
+        Private pnlHeroBanner As Panel
         Private lblHeroStatusTitle As Label
         Private lblHeroStatusSub As Label
 
-        Private pnlMetricSummaryHost As KryptonPanel
+        Private pnlMetricSummaryHost As Panel
         Private cardStatus As Panel
         Private lblStatusTitle As Label
         Private lblStatusValueBadge As Label
@@ -63,10 +62,10 @@ Namespace Forms.Attendance
         Private lblBreakTitle As Label
         Private lblBreakValue As Label
 
-        Private pnlGridBox As KryptonPanel
+        Private pnlGridBox As Panel
         Private lblGridHeader As Label
         Private dgvHistory As DataGridView
-        Private pnlEmptyState As KryptonPanel
+        Private pnlEmptyState As Panel
         Private picEmptyIcon As IconPictureBox
         Private lblEmptyTitle As Label
         Private lblEmptySub As Label
@@ -79,7 +78,24 @@ Namespace Forms.Attendance
             _policyEngine = New AttendancePolicyEngine()
             _policyProvider = New DefaultAttendancePolicyProvider()
 
+            Me.DoubleBuffered = True
+            Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
+            Me.UpdateStyles()
+
             InitializeComponent()
+        End Sub
+
+        Protected Overrides Sub OnPaintBackground(pevent As PaintEventArgs)
+            MyBase.OnPaintBackground(pevent)
+            If pevent IsNot Nothing AndAlso pevent.Graphics IsNot Nothing Then
+                Using b As New SolidBrush(ThemeConstants.WorkspaceBackground)
+                    pevent.Graphics.FillRectangle(b, ClientRectangle)
+                End Using
+            End If
+        End Sub
+
+        Protected Overrides Sub OnShown(e As EventArgs)
+            MyBase.OnShown(e)
             LoadStaffDetailDataAsync()
         End Sub
 
@@ -95,15 +111,14 @@ Namespace Forms.Attendance
             Me.Padding = New Padding(16)
 
             ' -----------------------------------------------------------------
-            ' 1. Application Dark Navy Identity Krypton Header Surface
+            ' 1. Application Dark Navy Identity Header Surface
             ' -----------------------------------------------------------------
-            pnlHeader = New KryptonPanel() With {
+            pnlHeader = New Panel() With {
                 .Dock = DockStyle.Top,
                 .Height = 56,
-                .Padding = New Padding(16, 8, 16, 8)
+                .Padding = New Padding(16, 8, 16, 8),
+                .BackColor = Color.FromArgb(15, 23, 42)
             }
-            pnlHeader.StateCommon.Color1 = Color.FromArgb(15, 23, 42)
-            pnlHeader.StateCommon.Color2 = Color.FromArgb(15, 23, 42)
 
             lblStaffName = New Label() With {
                 .Text = _staffName,
@@ -123,14 +138,18 @@ Namespace Forms.Attendance
                 .AutoSize = True
             }
 
-            btnCloseHeader = New KryptonButton() With {
+            btnCloseHeader = New Button() With {
                 .Text = "Close",
                 .Dock = DockStyle.Right,
                 .Width = 80,
                 .Height = 32,
-                .Margin = New Padding(0, 4, 0, 4)
+                .Margin = New Padding(0, 4, 0, 4),
+                .FlatStyle = FlatStyle.Flat,
+                .BackColor = Color.FromArgb(51, 65, 85),
+                .ForeColor = Color.White,
+                .Cursor = Cursors.Hand
             }
-            ThemeConstants.ApplyKryptonSecondaryButton(btnCloseHeader)
+            btnCloseHeader.FlatAppearance.BorderSize = 0
             AddHandler btnCloseHeader.Click, Sub(s, e) Me.Close()
 
             pnlHeader.Controls.Add(btnCloseHeader)
@@ -140,14 +159,13 @@ Namespace Forms.Attendance
             ' -----------------------------------------------------------------
             ' 2. Prominent Semantic Status Hero Area
             ' -----------------------------------------------------------------
-            pnlHeroBanner = New KryptonPanel() With {
+            pnlHeroBanner = New Panel() With {
                 .Dock = DockStyle.Top,
                 .Height = 54,
                 .Padding = New Padding(14, 8, 14, 8),
-                .Margin = New Padding(0, 10, 0, 8)
+                .Margin = New Padding(0, 10, 0, 8),
+                .BackColor = Color.FromArgb(248, 250, 252)
             }
-            pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(248, 250, 252)
-            pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(248, 250, 252)
 
             lblHeroStatusTitle = New Label() With {
                 .Text = "Evaluating live attendance status...",
@@ -173,17 +191,15 @@ Namespace Forms.Attendance
             ' -----------------------------------------------------------------
             ' 3. Visually Distinct Semantic Metric Cards Row with FontAwesome Icons
             ' -----------------------------------------------------------------
-            pnlMetricSummaryHost = New KryptonPanel() With {
+            pnlMetricSummaryHost = New Panel() With {
                 .Dock = DockStyle.Top,
                 .Height = 68,
-                .Margin = New Padding(0, 0, 0, 10)
+                .Margin = New Padding(0, 0, 0, 10),
+                .BackColor = ThemeConstants.WorkspaceBackground
             }
-            pnlMetricSummaryHost.StateCommon.Color1 = Color.Transparent
-            pnlMetricSummaryHost.StateCommon.Color2 = Color.Transparent
 
             ' Card 1: Today's Status
-            cardStatus = CreateSummaryMetricBox("TODAY'S STATUS", 0, 172, IconChar.ChartBar, Color.FromArgb(241, 245, 249))
-            lblStatusTitle = CType(cardStatus.Controls(0), Label)
+            cardStatus = CreateSummaryMetricBox("TODAY'S STATUS", 0, 172, IconChar.ChartBar, Color.FromArgb(241, 245, 249), lblStatusTitle)
             lblStatusValueBadge = New Label() With {
                 .Text = "Loading...",
                 .Font = New Font(ThemeConstants.FontNameDefault, 9.5!, FontStyle.Bold),
@@ -195,8 +211,7 @@ Namespace Forms.Attendance
             cardStatus.Controls.Add(lblStatusValueBadge)
 
             ' Card 2: Net Working Time
-            cardNetWork = CreateSummaryMetricBox("TODAY'S NET WORK", 182, 172, IconChar.Clock, Color.FromArgb(240, 249, 255))
-            lblNetTitle = CType(cardNetWork.Controls(0), Label)
+            cardNetWork = CreateSummaryMetricBox("TODAY'S NET WORK", 182, 172, IconChar.Clock, Color.FromArgb(240, 249, 255), lblNetTitle)
             lblNetValue = New Label() With {
                 .Text = "--",
                 .Font = New Font(ThemeConstants.FontNameDefault, 16.0!, FontStyle.Bold),
@@ -208,8 +223,7 @@ Namespace Forms.Attendance
             cardNetWork.Controls.Add(lblNetValue)
 
             ' Card 3: Gross Working Time
-            cardGrossWork = CreateSummaryMetricBox("GROSS WORKING TIME", 364, 172, IconChar.HourglassHalf, Color.FromArgb(236, 253, 245))
-            lblGrossTitle = CType(cardGrossWork.Controls(0), Label)
+            cardGrossWork = CreateSummaryMetricBox("GROSS WORKING TIME", 364, 172, IconChar.HourglassHalf, Color.FromArgb(236, 253, 245), lblGrossTitle)
             lblGrossValue = New Label() With {
                 .Text = "--",
                 .Font = New Font(ThemeConstants.FontNameDefault, 16.0!, FontStyle.Bold),
@@ -221,8 +235,7 @@ Namespace Forms.Attendance
             cardGrossWork.Controls.Add(lblGrossValue)
 
             ' Card 4: Lunch / Break Time
-            cardLunchBreak = CreateSummaryMetricBox("LUNCH / BREAK TIME", 546, 172, IconChar.Utensils, Color.FromArgb(255, 251, 235))
-            lblBreakTitle = CType(cardLunchBreak.Controls(0), Label)
+            cardLunchBreak = CreateSummaryMetricBox("LUNCH / BREAK TIME", 546, 172, IconChar.Utensils, Color.FromArgb(255, 251, 235), lblBreakTitle)
             lblBreakValue = New Label() With {
                 .Text = "--",
                 .Font = New Font(ThemeConstants.FontNameDefault, 16.0!, FontStyle.Bold),
@@ -239,14 +252,13 @@ Namespace Forms.Attendance
             pnlMetricSummaryHost.Controls.Add(cardStatus)
 
             ' -----------------------------------------------------------------
-            ' 4. Monthly Attendance History Krypton Grid Box & Empty State
+            ' 4. Monthly Attendance History Grid Box & Empty State
             ' -----------------------------------------------------------------
-            pnlGridBox = New KryptonPanel() With {
+            pnlGridBox = New Panel() With {
                 .Dock = DockStyle.Fill,
-                .Margin = New Padding(0, 10, 0, 0)
+                .Margin = New Padding(0, 10, 0, 0),
+                .BackColor = Color.White
             }
-            pnlGridBox.StateCommon.Color1 = Color.White
-            pnlGridBox.StateCommon.Color2 = Color.White
 
             lblGridHeader = New Label() With {
                 .Text = "Complete Monthly Punch Log History",
@@ -278,12 +290,11 @@ Namespace Forms.Attendance
             AddHandler dgvHistory.CellPainting, AddressOf dgvHistory_CellPainting
 
             ' Intentional Empty State Container Panel
-            pnlEmptyState = New KryptonPanel() With {
+            pnlEmptyState = New Panel() With {
                 .Dock = DockStyle.Fill,
-                .Visible = False
+                .Visible = False,
+                .BackColor = Color.White
             }
-            pnlEmptyState.StateCommon.Color1 = Color.White
-            pnlEmptyState.StateCommon.Color2 = Color.White
 
             picEmptyIcon = New IconPictureBox() With {
                 .IconChar = IconChar.ClipboardList,
@@ -291,7 +302,7 @@ Namespace Forms.Attendance
                 .IconSize = 48,
                 .Size = New Size(48, 48),
                 .Location = New Point(340, 80),
-                .BackColor = Color.Transparent
+                .BackColor = Color.White
             }
 
             lblEmptyTitle = New Label() With {
@@ -330,7 +341,7 @@ Namespace Forms.Attendance
             Me.ResumeLayout(False)
         End Sub
 
-        Private Function CreateSummaryMetricBox(title As String, leftPos As Integer, boxWidth As Integer, iconChar As IconChar, bgCol As Color) As Panel
+        Private Function CreateSummaryMetricBox(title As String, leftPos As Integer, boxWidth As Integer, iconChar As IconChar, bgCol As Color, ByRef lblTitleRef As Label) As Panel
             Dim pnl As New Panel() With {
                 .Location = New Point(leftPos, 0),
                 .Size = New Size(boxWidth, 64),
@@ -338,7 +349,7 @@ Namespace Forms.Attendance
                 .BorderStyle = BorderStyle.FixedSingle
             }
 
-            Dim lblTitle As New Label() With {
+            lblTitleRef = New Label() With {
                 .Text = title,
                 .Font = New Font(ThemeConstants.FontNameDefault, 7.5!, FontStyle.Bold),
                 .ForeColor = Color.FromArgb(71, 85, 105),
@@ -353,11 +364,11 @@ Namespace Forms.Attendance
                 .IconSize = 18,
                 .Size = New Size(18, 18),
                 .Location = New Point(boxWidth - 24, 6),
-                .BackColor = Color.Transparent
+                .BackColor = bgCol
             }
 
             pnl.Controls.Add(picIcon)
-            pnl.Controls.Add(lblTitle)
+            pnl.Controls.Add(lblTitleRef)
             Return pnl
         End Function
 
@@ -376,7 +387,7 @@ Namespace Forms.Attendance
 
                     Dim prog = _policyEngine.CalculateProgress(clockIn, clockOut, DateTime.Now, policy, breakStart, totalBreak)
 
-                    lblStatusValueBadge.Text = prog.AttendanceState
+                    lblStatusValueBadge.Text = If(String.IsNullOrEmpty(prog.AttendanceState), "Not Punched In", prog.AttendanceState)
                     lblNetValue.Text = AttendanceUiPresenter.FormatHoursShort(prog.NetWorkedMinutes)
                     lblGrossValue.Text = AttendanceUiPresenter.FormatHoursShort(prog.GrossWorkedMinutes)
                     lblBreakValue.Text = AttendanceUiPresenter.FormatHoursShort(prog.TotalBreakMinutes)
@@ -384,43 +395,38 @@ Namespace Forms.Attendance
                     ' Apply Hero Banner Semantic Background & Contextual Explanation
                     Select Case prog.AttendanceState
                         Case "Working"
-                            pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(236, 253, 245)
-                            pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(236, 253, 245)
+                            pnlHeroBanner.BackColor = Color.FromArgb(236, 253, 245)
                             lblHeroStatusTitle.Text = "Currently Working"
                             lblHeroStatusTitle.ForeColor = Color.FromArgb(6, 95, 70)
-                            Dim pInStr = If(clockIn.HasValue, clockIn.Value.ToString("hh:mm tt"), "--")
+                            Dim pInStr = If(clockIn.HasValue AndAlso clockIn.Value <> DateTime.MinValue, clockIn.Value.ToString("hh:mm tt"), "--")
                             lblHeroStatusSub.Text = $"Clocked in today at {pInStr} — Net working duration: {AttendanceUiPresenter.FormatHoursShort(prog.NetWorkedMinutes)}"
                             lblHeroStatusSub.ForeColor = Color.FromArgb(4, 120, 87)
 
                         Case "On Lunch Break"
-                            pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(255, 251, 235)
-                            pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(255, 251, 235)
+                            pnlHeroBanner.BackColor = Color.FromArgb(255, 251, 235)
                             lblHeroStatusTitle.Text = "On Lunch Break"
                             lblHeroStatusTitle.ForeColor = Color.FromArgb(146, 64, 14)
                             lblHeroStatusSub.Text = $"Staff member is currently on break — Total break duration: {prog.TotalBreakMinutes} minutes"
                             lblHeroStatusSub.ForeColor = Color.FromArgb(180, 83, 9)
 
                         Case "Day Completed", "Completed"
-                            pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(241, 245, 249)
-                            pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(241, 245, 249)
+                            pnlHeroBanner.BackColor = Color.FromArgb(241, 245, 249)
                             lblHeroStatusTitle.Text = "Workday Completed"
                             lblHeroStatusTitle.ForeColor = Color.FromArgb(30, 41, 59)
-                            Dim pOutStr = If(clockOut.HasValue, clockOut.Value.ToString("hh:mm tt"), "--")
+                            Dim pOutStr = If(clockOut.HasValue AndAlso clockOut.Value <> DateTime.MinValue, clockOut.Value.ToString("hh:mm tt"), "--")
                             lblHeroStatusSub.Text = $"Shift completed today at {pOutStr} — Total worked: {AttendanceUiPresenter.FormatHoursShort(prog.NetWorkedMinutes)}"
                             lblHeroStatusSub.ForeColor = Color.FromArgb(71, 85, 105)
 
                         Case Else
-                            If todayRec.Status.Contains("Late") Then
-                                pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(254, 242, 242)
-                                pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(254, 242, 242)
+                            If todayRec.Status IsNot Nothing AndAlso todayRec.Status.Contains("Late") Then
+                                pnlHeroBanner.BackColor = Color.FromArgb(254, 242, 242)
                                 lblHeroStatusTitle.Text = "Late Arrival Flagged"
                                 lblHeroStatusTitle.ForeColor = Color.FromArgb(153, 27, 27)
-                                Dim pInStr = If(clockIn.HasValue, clockIn.Value.ToString("hh:mm tt"), "--")
+                                Dim pInStr = If(clockIn.HasValue AndAlso clockIn.Value <> DateTime.MinValue, clockIn.Value.ToString("hh:mm tt"), "--")
                                 lblHeroStatusSub.Text = $"Clocked in late at {pInStr} — Workday in progress"
                                 lblHeroStatusSub.ForeColor = Color.FromArgb(185, 28, 28)
                             Else
-                                pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(248, 250, 252)
-                                pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(248, 250, 252)
+                                pnlHeroBanner.BackColor = Color.FromArgb(248, 250, 252)
                                 lblHeroStatusTitle.Text = $"Status: {prog.AttendanceState}"
                                 lblHeroStatusTitle.ForeColor = Color.FromArgb(30, 41, 59)
                                 lblHeroStatusSub.Text = "Staff attendance record actively logged"
@@ -428,8 +434,7 @@ Namespace Forms.Attendance
                             End If
                     End Select
                 Else
-                    pnlHeroBanner.StateCommon.Color1 = Color.FromArgb(255, 247, 237)
-                    pnlHeroBanner.StateCommon.Color2 = Color.FromArgb(255, 247, 237)
+                    pnlHeroBanner.BackColor = Color.FromArgb(255, 247, 237)
                     lblHeroStatusTitle.Text = "Not Punched In Today"
                     lblHeroStatusTitle.ForeColor = Color.FromArgb(154, 52, 18)
                     lblHeroStatusSub.Text = "No punch log or attendance entry has been recorded for today yet."
@@ -457,11 +462,12 @@ Namespace Forms.Attendance
                     dt.Columns.Add("Status")
 
                     For Each item In history
-                        Dim pIn = item.ClockInTime.ToString("hh:mm tt")
-                        Dim pOut = If(item.ClockOutTime.HasValue, item.ClockOutTime.Value.ToString("hh:mm tt"), "--")
+                        Dim pIn = If(item.ClockInTime = DateTime.MinValue, "--", item.ClockInTime.ToString("hh:mm tt"))
+                        Dim pOut = If(item.ClockOutTime.HasValue AndAlso item.ClockOutTime.Value <> DateTime.MinValue, item.ClockOutTime.Value.ToString("hh:mm tt"), "--")
                         Dim brk = If(item.TotalBreakMinutes > 0, $"{item.TotalBreakMinutes} m", "--")
                         Dim hrs = If(item.ClockOutTime.HasValue, AttendanceUiPresenter.FormatHoursShort(item.TotalWorkingMinutes), "--")
-                        dt.Rows.Add(item.AttendanceDate.ToString("dd-MMM-yyyy"), pIn, pOut, brk, hrs, item.Status)
+                        Dim statusStr = If(String.IsNullOrEmpty(item.Status), "Not Punched", item.Status)
+                        dt.Rows.Add(item.AttendanceDate.ToString("dd-MMM-yyyy"), pIn, pOut, brk, hrs, statusStr)
                     Next
 
                     dgvHistory.DataSource = dt
@@ -511,102 +517,123 @@ Namespace Forms.Attendance
         End Sub
 
         Private Sub dgvHistory_CellPainting(sender As Object, e As DataGridViewCellPaintingEventArgs)
-            If e.RowIndex < 0 OrElse e.ColumnIndex < 0 Then Return
+            Try
+                If e.RowIndex < 0 OrElse e.ColumnIndex < 0 Then Return
+                If dgvHistory.Columns Is Nothing OrElse e.ColumnIndex >= dgvHistory.Columns.Count Then Return
 
-            Dim colName = dgvHistory.Columns(e.ColumnIndex).Name
+                Dim colName = dgvHistory.Columns(e.ColumnIndex).Name
 
-            ' Owner-drawn status badges matching AdminAttendanceBoardControl renderer
-            If colName = "Status" AndAlso e.Value IsNot Nothing Then
-                e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
+                ' Owner-drawn status badges matching AdminAttendanceBoardControl renderer
+                If colName = "Status" AndAlso e.Value IsNot Nothing AndAlso e.Value IsNot DBNull.Value Then
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
 
-                Dim statusText = e.Value.ToString()
-                Dim bgCol As Color
-                Dim textCol As Color
-                Dim borderCol As Color
-                Dim displayBadgeText As String = statusText
+                    Dim statusText = e.Value.ToString()
+                    Dim bgCol As Color
+                    Dim textCol As Color
+                    Dim borderCol As Color
+                    Dim displayBadgeText As String = statusText
 
-                Select Case statusText
-                    Case "Working"
-                        bgCol = Color.FromArgb(220, 252, 231)
-                        textCol = Color.FromArgb(22, 101, 52)
-                        borderCol = Color.FromArgb(134, 239, 172)
-                        displayBadgeText = "Working"
-                    Case "On Lunch Break"
-                        bgCol = Color.FromArgb(254, 243, 199)
-                        textCol = Color.FromArgb(146, 64, 14)
-                        borderCol = Color.FromArgb(253, 230, 138)
-                        displayBadgeText = "On Break"
-                    Case "Day Completed", "Completed"
-                        bgCol = Color.FromArgb(241, 245, 249)
-                        textCol = Color.FromArgb(51, 65, 85)
-                        borderCol = Color.FromArgb(203, 213, 225)
-                        displayBadgeText = "Completed"
-                    Case "Not Punched In"
-                        bgCol = Color.FromArgb(254, 226, 226)
-                        textCol = Color.FromArgb(153, 27, 27)
-                        borderCol = Color.FromArgb(254, 202, 202)
-                        displayBadgeText = "Not Punched"
-                    Case Else
-                        If statusText.Contains("Late") Then
-                            bgCol = Color.FromArgb(255, 237, 213)
-                            textCol = Color.FromArgb(154, 52, 18)
-                            borderCol = Color.FromArgb(253, 186, 116)
-                            displayBadgeText = "Late"
-                        Else
+                    Select Case statusText
+                        Case "Working"
+                            bgCol = Color.FromArgb(220, 252, 231)
+                            textCol = Color.FromArgb(22, 101, 52)
+                            borderCol = Color.FromArgb(134, 239, 172)
+                            displayBadgeText = "Working"
+                        Case "On Lunch Break"
+                            bgCol = Color.FromArgb(254, 243, 199)
+                            textCol = Color.FromArgb(146, 64, 14)
+                            borderCol = Color.FromArgb(253, 230, 138)
+                            displayBadgeText = "On Break"
+                        Case "Day Completed", "Completed"
                             bgCol = Color.FromArgb(241, 245, 249)
                             textCol = Color.FromArgb(51, 65, 85)
                             borderCol = Color.FromArgb(203, 213, 225)
-                            displayBadgeText = statusText
-                        End If
-                End Select
+                            displayBadgeText = "Completed"
+                        Case "Not Punched In"
+                            bgCol = Color.FromArgb(254, 226, 226)
+                            textCol = Color.FromArgb(153, 27, 27)
+                            borderCol = Color.FromArgb(254, 202, 202)
+                            displayBadgeText = "Not Punched"
+                        Case Else
+                            If statusText.Contains("Late") Then
+                                bgCol = Color.FromArgb(255, 237, 213)
+                                textCol = Color.FromArgb(154, 52, 18)
+                                borderCol = Color.FromArgb(253, 186, 116)
+                                displayBadgeText = "Late"
+                            Else
+                                bgCol = Color.FromArgb(241, 245, 249)
+                                textCol = Color.FromArgb(51, 65, 85)
+                                borderCol = Color.FromArgb(203, 213, 225)
+                                displayBadgeText = statusText
+                            End If
+                    End Select
 
-                Dim badgeWidth = Math.Min(e.CellBounds.Width - 12, 110)
-                Dim badgeHeight = 22
-                Dim badgeRect As New Rectangle(
-                    e.CellBounds.X + (e.CellBounds.Width - badgeWidth) \ 2,
-                    e.CellBounds.Y + (e.CellBounds.Height - badgeHeight) \ 2,
-                    badgeWidth,
-                    badgeHeight
-                )
+                    Dim badgeWidth = Math.Min(e.CellBounds.Width - 12, 110)
+                    Dim badgeHeight = 22
+                    If badgeWidth < 20 OrElse badgeHeight < 10 OrElse e.CellBounds.Width < 25 Then
+                        e.Handled = False
+                        Return
+                    End If
 
-                Using bgBrush As New SolidBrush(bgCol),
-                      borderPen As New Pen(borderCol),
-                      textBrush As New SolidBrush(textCol),
-                      sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
+                    Dim badgeRect As New Rectangle(
+                        e.CellBounds.X + (e.CellBounds.Width - badgeWidth) \ 2,
+                        e.CellBounds.Y + (e.CellBounds.Height - badgeHeight) \ 2,
+                        badgeWidth,
+                        badgeHeight
+                    )
 
-                    Using path = GetRoundedRectPath(badgeRect, 5)
-                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
-                        e.Graphics.FillPath(bgBrush, path)
-                        e.Graphics.DrawPath(borderPen, path)
+                    Using bgBrush As New SolidBrush(bgCol),
+                          borderPen As New Pen(borderCol),
+                          textBrush As New SolidBrush(textCol),
+                          sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
+
+                        Using path = GetRoundedRectPath(badgeRect, 5)
+                            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
+                            e.Graphics.FillPath(bgBrush, path)
+                            e.Graphics.DrawPath(borderPen, path)
+                        End Using
+
+                        Using badgeFont As New Font(ThemeConstants.FontNameDefault, 8.0!, FontStyle.Bold)
+                            e.Graphics.DrawString(displayBadgeText, badgeFont, textBrush, badgeRect, sf)
+                        End Using
                     End Using
 
-                    Using badgeFont As New Font(ThemeConstants.FontNameDefault, 8.0!, FontStyle.Bold)
-                        e.Graphics.DrawString(displayBadgeText, badgeFont, textBrush, badgeRect, sf)
-                    End Using
-                End Using
-
-                e.Handled = True
-            End If
+                    e.Handled = True
+                End If
+            Catch ex As Exception
+                e.Handled = False
+            End Try
         End Sub
 
-        Private Function GetRoundedRectPath(rect As Rectangle, radius As Integer) As System.Drawing.Drawing2D.GraphicsPath
-            Dim path As New System.Drawing.Drawing2D.GraphicsPath()
+        Private Function GetRoundedRectPath(rect As Rectangle, radius As Integer) As GraphicsPath
+            Dim path As New GraphicsPath()
             Dim diameter = radius * 2
-            Dim arc As New Rectangle(rect.X, rect.Y, diameter, diameter)
+            Dim arcRect As New Rectangle(rect.X, rect.Y, diameter, diameter)
 
-            path.AddArc(arc, 180, 90)
+            ' Top-Left Arc
+            path.AddArc(arcRect, 180, 90)
 
-            arc.X = rect.Right - diameter
-            path.AddArc(arc, 270, 90)
+            ' Top-Right Arc
+            arcRect.X = rect.Right - diameter
+            path.AddArc(arcRect, 270, 90)
 
-            arc.Y = rect.Bottom - diameter
-            path.AddArc(arc, 0, 90)
+            ' Bottom-Right Arc
+            arcRect.Y = rect.Bottom - diameter
+            path.AddArc(arcRect, 0, 90)
 
-            arc.X = rect.X
-            path.AddArc(arc, 90, 90)
+            ' Bottom-Left Arc
+            arcRect.X = rect.X
+            path.AddArc(arcRect, 90, 90)
 
             path.CloseFigure()
             Return path
         End Function
+
+        Protected Overrides Sub OnKeyDown(e As KeyEventArgs)
+            MyBase.OnKeyDown(e)
+            If e.KeyCode = Keys.Escape Then
+                Me.Close()
+            End If
+        End Sub
     End Class
 End Namespace

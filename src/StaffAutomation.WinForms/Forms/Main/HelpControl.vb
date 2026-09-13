@@ -33,7 +33,7 @@ Namespace Forms.Main
             ' 1. Hero Page Header
             pnlHeroHeader = New Panel()
             lblHeroTitle = New Label() With {.Text = "❓ Help & Knowledgebase Support Center"}
-            lblHeroSubtitle = New Label() With {.Text = "Access CA office operating manuals, keyboard shortcuts, technical support hotline, and system diagnostics."}
+            lblHeroSubtitle = New Label() With {.Text = "Access CA office operating manuals, keyboard shortcuts, technical support hotline, and system information."}
             ThemeConstants.ApplyHeaderStyle(pnlHeroHeader, lblHeroTitle, lblHeroSubtitle)
 
             pnlHeroHeader.Controls.Add(lblHeroSubtitle)
@@ -55,9 +55,9 @@ Namespace Forms.Main
                                                      FrmInAppAlert.ShowModal(Me.FindForm(), "User Operating Manual", "CA Office Automation Operating Workflow:" & Environment.NewLine & "1. Client Onboarding: Add PAN/GSTIN/Firm details in Client Master." & Environment.NewLine & "2. Task Allocation: Assign staff tasks with statutory filing cutoffs." & Environment.NewLine & "3. Attendance: Log daily check-in/out and leave requests." & Environment.NewLine & "4. Disaster Recovery: Perform daily T-SQL backups in Database Console.", AlertType.SuccessAlert)
                                                  End Sub
 
-            Dim cardSupport = CreateActionCard("☎️  Technical Support Desk", "Direct helpline for SQL Server setup, network database logins, user permission resets, and technical assistance.", "Helpdesk Online", ThemeConstants.SuccessGreen, "View Guide →")
+            Dim cardSupport = CreateActionCard("☎️  Technical Support Desk", "Need assistance with the application? Contact your system administrator or support team for help with setup, user access, and application issues.", "Helpdesk Online", ThemeConstants.SuccessGreen, "View Guide →")
             AddHandler cardSupport.ActionClicked, Sub(s, e)
-                                                      FrmInAppAlert.ShowModal(Me.FindForm(), "Technical Support Desk", "CA Office Technical Support:" & Environment.NewLine & "• Email: support@caofficeautomation.com" & Environment.NewLine & "• Phone: +91 (022) 2200-1122" & Environment.NewLine & "• Hours: Mon-Sat 09:30 AM - 07:00 PM IST" & Environment.NewLine & "• Database Engine: SQL Server 2019 / 2022 Express", AlertType.SuccessAlert)
+                                                      FrmInAppAlert.ShowModal(Me.FindForm(), "Technical Support Desk", "CA Office Technical Support:" & Environment.NewLine & "• Email: support@caofficeautomation.com" & Environment.NewLine & "• Phone: +91 (022) 2200-1122" & Environment.NewLine & "• Hours: Mon-Sat 09:30 AM - 07:00 PM IST", AlertType.SuccessAlert)
                                                   End Sub
 
             Dim cardShortcuts = CreateActionCard("⌨️  Keyboard Shortcuts", "Quick hotkey reference for navigating between Dashboard, Daily Tasks, Client Master, Attendance, and Executive Reports.", "Hotkey Cheatsheet Ready", Color.FromArgb(124, 58, 237), "View Guide →")
@@ -65,9 +65,9 @@ Namespace Forms.Main
                                                         FrmInAppAlert.ShowModal(Me.FindForm(), "Keyboard Hotkey Reference", "System Hotkeys:" & Environment.NewLine & "• Alt + D : Executive Dashboard" & Environment.NewLine & "• Alt + T : Daily Tasks & Timeline" & Environment.NewLine & "• Alt + C : Client Master Directory" & Environment.NewLine & "• Alt + A : Staff Attendance Logging" & Environment.NewLine & "• Alt + S : Settings & Security Console", AlertType.SuccessAlert)
                                                     End Sub
 
-            Dim cardDiagnostics = CreateActionCard("ℹ️  System Version & Diagnostics", "CA Office Workforce Productivity Automation System v1.0.0 Enterprise Build (Target: .NET 8 WinForms & SQL Express).", "v1.0.0 Enterprise Build", Color.FromArgb(13, 148, 136), "View Guide →")
+            Dim cardDiagnostics = CreateActionCard("ℹ️  System Information", $"CA Office Workforce Productivity Automation System v{Core.Constants.AppConstants.AppVersion} Enterprise Build.", $"v{Core.Constants.AppConstants.AppVersion} Enterprise Build", Color.FromArgb(13, 148, 136), "View Guide →")
             AddHandler cardDiagnostics.ActionClicked, Sub(s, e)
-                                                           FrmInAppAlert.ShowModal(Me.FindForm(), "System Diagnostics & Environment", "Application Build Specifications:" & Environment.NewLine & "• Product: CA Office Workforce Automation" & Environment.NewLine & "• Framework: .NET 8.0 Windows Desktop (x64)" & Environment.NewLine & "• Database: Microsoft SQL Server Express" & Environment.NewLine & "• Design Tokens: Krypton Theme System 1366x768", AlertType.SuccessAlert)
+                                                           FrmInAppAlert.ShowModal(Me.FindForm(), "System Information", "Application Specifications:" & Environment.NewLine & "• Product: CA Office Workforce Automation" & Environment.NewLine & $"• Version: v{Core.Constants.AppConstants.AppVersion} Enterprise Build" & Environment.NewLine & "• Edition: Commercial Suite" & Environment.NewLine & "• License: Active", AlertType.SuccessAlert)
                                                        End Sub
 
             Dim cardCompliance = CreateActionCard("🏛️  CA Statutory Compliance Guide", "Pre-configured tax audit, GSTR-1, GSTR-3B, TDS return, and corporate MCA compliance workflow checklists.", "Tax Suite Integrated", Color.FromArgb(217, 119, 6), "View Guide →")

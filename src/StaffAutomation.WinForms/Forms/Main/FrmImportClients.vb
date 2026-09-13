@@ -15,6 +15,7 @@ Imports StaffAutomation.Core.DTOs
 Imports StaffAutomation.Core.Enums
 Imports StaffAutomation.Core.Interfaces
 Imports StaffAutomation.Core.Logging
+Imports StaffAutomation.Core.Security
 Imports StaffAutomation.DAL.Configuration
 Imports StaffAutomation.DAL.Repositories
 
@@ -95,7 +96,7 @@ Namespace Forms.Main
             pnlHeader.Controls.Add(lblSubtitle)
             pnlHeader.Controls.Add(lblTitle)
 
-            ' 2. Top Action Toolbar
+            ' 2. Top Controls (Browse / Status)
             pnlToolbar = New Panel() With {
                 .Dock = DockStyle.Top,
                 .Height = 52,
@@ -161,12 +162,13 @@ Namespace Forms.Main
             pnlFooter = New Panel() With {
                 .Dock = DockStyle.Bottom,
                 .Height = 58,
+                .Width = 940,
                 .BackColor = Color.White,
                 .Padding = New Padding(16, 10, 16, 10)
             }
 
             lblSummary = New Label() With {
-                .Text = "Total Loaded Rows: 0  |  Valid New: 0  |  Duplicates: 0  |  Format Warnings: 0",
+                .Text = "Total Rows: 0  |  Ready to Import: 0  |  Invalid: 0  |  Duplicates: 0",
                 .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold),
                 .ForeColor = ThemeConstants.TextPrimary,
                 .Location = New Point(16, 18),
@@ -178,7 +180,7 @@ Namespace Forms.Main
                 .Image = VectorIconHelper.CreateCloseIcon(ThemeConstants.TextSecondary, 14),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Secondary,
                 .Size = New Size(100, 36),
-                .Anchor = AnchorStyles.Bottom Or AnchorStyles.Right,
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right,
                 .Location = New Point(600, 10)
             }
             AddHandler btnCloseDialog.Click, Sub(s, e) Me.Close()
@@ -188,7 +190,7 @@ Namespace Forms.Main
                 .Image = VectorIconHelper.CreateCheckIcon(Color.White, 16),
                 .Scheme = Forms.Common.ModernButton.ButtonScheme.Success,
                 .Size = New Size(195, 36),
-                .Anchor = AnchorStyles.Bottom Or AnchorStyles.Right,
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right,
                 .Location = New Point(712, 10),
                 .Enabled = False
             }
@@ -288,6 +290,7 @@ Namespace Forms.Main
 
                 Dim fileGstins As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
                 Dim fileCodes As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+                Dim filePans As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
 
                 Dim headers = rawRows(0).Select(Function(h) h.Trim().ToLower()).ToArray()
 
@@ -312,7 +315,7 @@ Namespace Forms.Main
                     row.Email = GetColValue(cols, headers, "email", 12)
 
                     ' Format & DB Duplicate Validation
-                    ValidateRowFormat(row, dbGstins, dbCodes, dbPans, fileGstins, fileCodes)
+                    ValidateRowFormat(row, dbGstins, dbCodes, dbPans, fileGstins, fileCodes, filePans)
                     _importedClients.Add(row)
                 Next
 
@@ -320,13 +323,18 @@ Namespace Forms.Main
                 dgvPreview.DataSource = _importedClients
                 dgvPreview.Refresh()
 
-                Dim validCount = _importedClients.Where(Function(r) r.ValidationStatus = "VALID").Count()
+                Dim validCount = _importedClients.Where(Function(r) r.ValidationStatus = "READY").Count()
                 Dim dupCount = _importedClients.Where(Function(r) r.ValidationStatus.StartsWith("DUPLICATE")).Count()
                 Dim warnCount = _importedClients.Where(Function(r) r.ValidationStatus.StartsWith("WARNING") OrElse r.ValidationStatus.StartsWith("ERROR")).Count()
-                lblSummary.Text = $"Total Rows: {_importedClients.Count}  |  Valid New: {validCount}  |  Duplicates: {dupCount}  |  Warnings/Errors: {warnCount}"
+                lblSummary.Text = $"Total Rows: {_importedClients.Count}  |  Ready to Import: {validCount}  |  Invalid: {warnCount}  |  Duplicates: {dupCount}"
 
-                Dim importableRowsCount = _importedClients.Where(Function(r) r.ValidationStatus = "VALID" OrElse r.ValidationStatus.StartsWith("WARNING")).Count()
+                Dim importableRowsCount = validCount
                 btnExecuteImport.Enabled = (importableRowsCount > 0)
+                If importableRowsCount > 0 Then
+                    btnExecuteImport.Text = $"  Import Valid Rows ({importableRowsCount})"
+                Else
+                    btnExecuteImport.Text = "  Execute Bulk Import"
+                End If
 
             Catch ex As Exception
                 AppNotificationHelper.ShowError($"Error reading file: {ex.Message}", "File Read Failure", Me)
@@ -343,7 +351,7 @@ Namespace Forms.Main
             Return String.Empty
         End Function
 
-        Private Sub ValidateRowFormat(row As ClientImportRow, dbGstins As HashSet(Of String), dbCodes As HashSet(Of String), dbPans As HashSet(Of String), fileGstins As HashSet(Of String), fileCodes As HashSet(Of String))
+        Private Sub ValidateRowFormat(row As ClientImportRow, dbGstins As HashSet(Of String), dbCodes As HashSet(Of String), dbPans As HashSet(Of String), fileGstins As HashSet(Of String), fileCodes As HashSet(Of String), filePans As HashSet(Of String))
             Dim issues As New List(Of String)()
             Dim isDuplicate As Boolean = False
 
@@ -351,20 +359,46 @@ Namespace Forms.Main
                 issues.Add("Missing Firm Name")
             End If
 
-            Dim cleanGstin = If(row.Gstin, String.Empty).Trim()
-            If Not String.IsNullOrWhiteSpace(cleanGstin) Then
-                If dbGstins.Contains(cleanGstin) Then
-                    issues.Add("DUPLICATE: GSTIN already in DB")
-                    isDuplicate = True
-                ElseIf fileGstins.Contains(cleanGstin) Then
-                    issues.Add("DUPLICATE: In-file duplicate GSTIN")
-                    isDuplicate = True
+            Dim cleanPan = If(row.PanNumber, String.Empty).Trim().ToUpperInvariant()
+            row.PanNumber = cleanPan
+            If Not String.IsNullOrWhiteSpace(cleanPan) Then
+                If Not Regex.IsMatch(cleanPan, "^[A-Z]{5}[0-9]{4}[A-Z]{1}$") Then
+                    issues.Add("PAN format invalid")
                 Else
-                    fileGstins.Add(cleanGstin)
+                    If dbPans.Contains(cleanPan) Then
+                        issues.Add("DUPLICATE: PAN already in DB")
+                        isDuplicate = True
+                    ElseIf filePans.Contains(cleanPan) Then
+                        issues.Add("DUPLICATE: In-file duplicate PAN")
+                        isDuplicate = True
+                    Else
+                        filePans.Add(cleanPan)
+                    End If
                 End If
+            End If
 
-                If cleanGstin.Length <> 15 Then
-                    issues.Add("GSTIN must be 15 chars")
+            Dim cleanGstin = If(row.Gstin, String.Empty).Trim().ToUpperInvariant()
+            row.Gstin = cleanGstin
+            If Not String.IsNullOrWhiteSpace(cleanGstin) Then
+                If Not Regex.IsMatch(cleanGstin, "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$") Then
+                    issues.Add("GSTIN format invalid")
+                Else
+                    Dim stateCode As Integer
+                    If Not Integer.TryParse(cleanGstin.Substring(0, 2), stateCode) OrElse stateCode < 1 OrElse stateCode > 38 Then
+                        issues.Add("Invalid State Code in GSTIN")
+                    ElseIf Not String.IsNullOrWhiteSpace(cleanPan) AndAlso cleanGstin.Substring(2, 10) <> cleanPan Then
+                        issues.Add("GSTIN and PAN do not match")
+                    End If
+
+                    If dbGstins.Contains(cleanGstin) Then
+                        issues.Add("DUPLICATE: GSTIN already in DB")
+                        isDuplicate = True
+                    ElseIf fileGstins.Contains(cleanGstin) Then
+                        issues.Add("DUPLICATE: In-file duplicate GSTIN")
+                        isDuplicate = True
+                    Else
+                        fileGstins.Add(cleanGstin)
+                    End If
                 End If
             End If
 
@@ -381,15 +415,11 @@ Namespace Forms.Main
                 End If
             End If
 
-            If Not String.IsNullOrWhiteSpace(row.PanNumber) AndAlso row.PanNumber.Trim().Length <> 10 Then
-                issues.Add("PAN must be 10 chars")
-            End If
-
             If issues.Count = 0 Then
-                row.ValidationStatus = "VALID"
+                row.ValidationStatus = "READY"
             ElseIf isDuplicate Then
                 row.ValidationStatus = "DUPLICATE: " & String.Join("; ", issues)
-            ElseIf issues.Any(Function(i) i.StartsWith("Missing")) Then
+            ElseIf issues.Any(Function(i) i.StartsWith("Missing") OrElse i.Contains("invalid") OrElse i.Contains("Invalid") OrElse i.Contains("match")) Then
                 row.ValidationStatus = "ERROR: " & String.Join("; ", issues)
             Else
                 row.ValidationStatus = "WARNING: " & String.Join("; ", issues)
@@ -408,7 +438,7 @@ Namespace Forms.Main
                 ElseIf status.StartsWith("WARNING") Then
                     e.CellStyle.BackColor = Color.FromArgb(254, 243, 199)
                     e.CellStyle.ForeColor = Color.FromArgb(146, 64, 14)
-                ElseIf status = "VALID" Then
+                ElseIf status = "READY" Then
                     e.CellStyle.BackColor = Color.FromArgb(240, 253, 244)
                     e.CellStyle.ForeColor = Color.FromArgb(22, 101, 52)
                 End If
@@ -417,22 +447,28 @@ Namespace Forms.Main
 
         Private Async Sub btnExecuteImport_Click(sender As Object, e As EventArgs)
             If _importedClients Is Nothing OrElse _importedClients.Count = 0 Then Return
+            
+            Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 0)
+            If currentUserId <= 0 Then
+                AppNotificationHelper.ShowError("Could not retrieve the current authenticated User ID. Please log in again.", "Authentication Error", Me)
+                Return
+            End If
 
-            Dim validImportRows = _importedClients.Where(Function(r) Not String.IsNullOrWhiteSpace(r.ClientName) AndAlso Not r.ValidationStatus.StartsWith("DUPLICATE") AndAlso Not r.ValidationStatus.StartsWith("ERROR")).ToList()
+            Dim validImportRows = _importedClients.Where(Function(r) r.ValidationStatus = "READY").ToList()
 
             If validImportRows.Count = 0 Then
                 AppNotificationHelper.ShowWarning("No valid non-duplicate client records found to import.", "Bulk Import Action", Me)
                 Return
             End If
 
+            Dim result = AppNotificationHelper.ShowQuestion($"{validImportRows.Count} client records are ready to be imported. Do you want to save these records?", "Import Clients?", Me)
+            If result <> DialogResult.Yes AndAlso result <> DialogResult.OK Then Return
+
             btnExecuteImport.Enabled = False
             btnExecuteImport.Text = "  Importing..."
 
-            Dim successCount As Integer = 0
-            Dim errorCount As Integer = 0
-            Dim skippedDupCount As Integer = _importedClients.Count - validImportRows.Count
-
             Try
+                Dim dtos As New List(Of ClientDto)()
                 For Each row In validImportRows
                     Dim dto As New ClientDto With {
                         .ClientCode = If(String.IsNullOrWhiteSpace(row.ClientCode), $"CLI-{DateTime.Now.Ticks.ToString().Substring(12)}", row.ClientCode),
@@ -448,18 +484,15 @@ Namespace Forms.Main
                         .ContactPerson = row.ContactPerson,
                         .Phone = row.Phone,
                         .Email = row.Email,
+                        .Department = Nothing,
                         .IsActive = True
                     }
-
-                    Dim createdId = Await _clientService.CreateClientAsync(dto)
-                    If createdId > 0 Then
-                        successCount += 1
-                    Else
-                        errorCount += 1
-                    End If
+                    dtos.Add(dto)
                 Next
 
-                AppNotificationHelper.ShowSuccess($"BULK CLIENT IMPORT EXECUTED SUCCESSFULLY!{Environment.NewLine}{Environment.NewLine}• Imported Clients: {successCount}{Environment.NewLine}• Skipped Duplicates/Errors: {skippedDupCount}{Environment.NewLine}• Failed Rows: {errorCount}", "Bulk Import Execution Complete", Me)
+                Dim successCount = Await _clientService.CreateClientsBulkAsync(dtos)
+
+                AppNotificationHelper.ShowSuccess($"{successCount} client records imported successfully.", "Import Completed", Me)
                 Me.DialogResult = DialogResult.OK
                 Me.Close()
 

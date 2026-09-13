@@ -298,6 +298,7 @@ Namespace Forms.Attendance
                 Dim success = Await _attendanceService.CorrectStaffAttendanceAsync(adminUserId, dto)
 
                 If success Then
+                    Forms.Common.DataStateTracker.MarkAttendanceChanged()
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Correction Saved", $"Attendance correction successfully saved for {_staffName}!{vbCrLf}Audit trail logged.", Forms.Common.AlertType.SuccessAlert, actionText:="OK")
                     Me.DialogResult = DialogResult.OK
                     Me.Close()

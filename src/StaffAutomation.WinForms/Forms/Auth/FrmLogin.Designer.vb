@@ -198,7 +198,7 @@ Namespace Forms.Auth
             Me.lblVersion.Name = "lblVersion"
             Me.lblVersion.Size = New Size(116, 13)
             Me.lblVersion.TabIndex = 8
-            Me.lblVersion.Text = "v2.5.0 Enterprise Build"
+            ' Version set dynamically in form load
             '
             ' pnlRightForm
             '

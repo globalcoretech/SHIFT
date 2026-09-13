@@ -21,6 +21,9 @@ Namespace Interfaces
         Function ReassignTaskAsync(taskId As Integer, newAssigneeUserId As Integer) As Task(Of Boolean)
         Function SoftDeleteTaskAsync(taskId As Integer) As Task(Of Boolean)
         Function SoftDeleteTaskAsync(taskId As Integer, originalModifiedOn As Nullable(Of DateTime)) As Task(Of Boolean)
+        Function RestoreTaskAsync(taskId As Integer) As Task(Of Boolean)
+        Function PermanentlyDeleteTaskAsync(taskId As Integer) As Task(Of Boolean)
+        Function GetTaskDependencyCountsAsync(taskId As Integer) As Task(Of Tuple(Of Integer, Integer))
         Function CanAcceptTask(task As TaskDto, currentUserId As Integer, userRole As UserRole) As Boolean
         Function CanAcceptTask(state As TaskWorkflowState, assignedToUserId As Integer, currentUserId As Integer, userRole As UserRole) As Boolean
         Function CanEditTask(state As TaskWorkflowState) As Boolean

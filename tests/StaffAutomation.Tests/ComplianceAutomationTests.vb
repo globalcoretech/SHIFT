@@ -242,5 +242,20 @@ Namespace StaffAutomation.Tests
         Public Function GetDepartmentIdByEnumAsync(dept As DepartmentType) As Task(Of Integer) Implements ITaskRepository.GetDepartmentIdByEnumAsync
             Return Task.FromResult(1)
         End Function
+
+        Public Function GetCategoryInfoMapAsync() As Task(Of Dictionary(Of Integer, Tuple(Of String, String))) Implements ITaskRepository.GetCategoryInfoMapAsync
+            Return Task.FromResult(New Dictionary(Of Integer, Tuple(Of String, String))())
+        End Function
+        Public Function RestoreAsync(taskId As Integer, modifiedBy As Integer) As Task(Of Boolean) Implements ITaskRepository.RestoreAsync
+            Return Task.FromResult(True)
+        End Function
+
+        Public Function HardDeleteAsync(taskId As Integer) As Task(Of Boolean) Implements ITaskRepository.HardDeleteAsync
+            Return Task.FromResult(True)
+        End Function
+
+        Public Function GetTaskDependencyCountsAsync(taskId As Integer) As Task(Of Tuple(Of Integer, Integer)) Implements ITaskRepository.GetTaskDependencyCountsAsync
+            Return Task.FromResult(New Tuple(Of Integer, Integer)(0, 0))
+        End Function
     End Class
 End Namespace

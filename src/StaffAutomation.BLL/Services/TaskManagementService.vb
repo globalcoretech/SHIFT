@@ -46,7 +46,12 @@ Namespace Services
         Public Async Function GetTaskByIdAsync(taskId As Integer) As Task(Of TaskDto) Implements ITaskManagementService.GetTaskByIdAsync
             Dim entity = Await _taskRepo.GetByIdAsync(taskId)
             If entity Is Nothing Then Return Nothing
-            Dim dto = MapToDto(entity)
+            Dim catDict As New Dictionary(Of Integer, Tuple(Of String, String))()
+            Try
+                catDict = Await _taskRepo.GetCategoryInfoMapAsync()
+            Catch
+            End Try
+            Dim dto = MapToDto(entity, catDict)
 
             If _clientRepo IsNot Nothing AndAlso dto.ClientId > 0 Then
                 Try
@@ -69,9 +74,14 @@ Namespace Services
 
         Public Async Function GetTasksForAssignedUserAsync(userId As Integer) As Task(Of List(Of TaskDto)) Implements ITaskManagementService.GetTasksForAssignedUserAsync
             Dim list = Await _taskRepo.GetTasksByAssigneeAsync(userId)
+            Dim catDict As New Dictionary(Of Integer, Tuple(Of String, String))()
+            Try
+                catDict = Await _taskRepo.GetCategoryInfoMapAsync()
+            Catch
+            End Try
             Dim dtoList As New List(Of TaskDto)()
             For Each item In list
-                dtoList.Add(MapToDto(item))
+                dtoList.Add(MapToDto(item, catDict))
             Next
             Return dtoList
         End Function
@@ -82,6 +92,12 @@ Namespace Services
 
         Public Async Function GetAllTasksAsync(Optional includeDeleted As Boolean = False) As Task(Of List(Of TaskDto)) Implements ITaskManagementService.GetAllTasksAsync
             Dim list = Await _taskRepo.GetAllTasksAsync(includeDeleted)
+
+            Dim catDict As New Dictionary(Of Integer, Tuple(Of String, String))()
+            Try
+                catDict = Await _taskRepo.GetCategoryInfoMapAsync()
+            Catch
+            End Try
 
             Dim clientDict As New Dictionary(Of Integer, String)()
             If _clientRepo IsNot Nothing Then
@@ -107,7 +123,7 @@ Namespace Services
 
             Dim dtoList As New List(Of TaskDto)()
             For Each item In list
-                Dim dto = MapToDto(item)
+                Dim dto = MapToDto(item, catDict)
                 If clientDict.ContainsKey(dto.ClientId) Then
                     dto.ClientName = clientDict(dto.ClientId)
                 End If
@@ -120,6 +136,11 @@ Namespace Services
         End Function
 
         Public Async Function CreateAndAssignTaskAsync(taskDto As TaskDto) As Task(Of Integer) Implements ITaskManagementService.CreateAndAssignTaskAsync
+            Dim currentRole As UserRole = If(CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing, CurrentUserContext.CurrentUser.Role, UserRole.Employee)
+            If currentRole = UserRole.Employee Then
+                Throw New BusinessException("Employees are not authorized to create new tasks.", "ERR_UNAUTHORIZED_TASK_CREATION")
+            End If
+
             Dim valRes = CommonValidators.ValidateRequired(taskDto.Description, "Description")
             If Not valRes.IsValid Then Throw New ValidationException(valRes.Errors(0), "Description")
 
@@ -604,16 +625,79 @@ Namespace Services
             End Try
         End Function
 
+        Public Async Function RestoreTaskAsync(taskId As Integer) As Task(Of Boolean) Implements ITaskManagementService.RestoreTaskAsync
+            Dim existing = Await _taskRepo.GetByIdAsync(taskId)
+            If existing Is Nothing OrElse Not existing.IsDeleted Then
+                Throw New BusinessException($"Task ID {taskId} was not found or is not deleted.", "ERR_TASK_NOT_DELETED")
+            End If
+
+            Dim currentUserId As Integer = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
+            
+            Dim success = Await _taskRepo.RestoreAsync(taskId, currentUserId)
+            If success Then
+                _appLogger.LogInfo($"Task ID {taskId} ({existing.TaskCode}) restored.", "TaskManagementService")
+                Await _auditLogger.LogAuditAsync(currentUserId, "TASK_RESTORED", "TaskManagement", $"[TASK_RESTORED] Task ID {taskId} ({existing.TaskCode}) restored.")
+            End If
+            Return success
+        End Function
+
+        Public Async Function GetTaskDependencyCountsAsync(taskId As Integer) As Task(Of Tuple(Of Integer, Integer)) Implements ITaskManagementService.GetTaskDependencyCountsAsync
+            Return Await _taskRepo.GetTaskDependencyCountsAsync(taskId)
+        End Function
+
+        Public Async Function PermanentlyDeleteTaskAsync(taskId As Integer) As Task(Of Boolean) Implements ITaskManagementService.PermanentlyDeleteTaskAsync
+            Dim existing = Await _taskRepo.GetByIdAsync(taskId)
+            If existing Is Nothing Then
+                Throw New BusinessException($"Task ID {taskId} was not found.", "ERR_TASK_NOT_FOUND")
+            End If
+
+            Dim currentUserId As Integer = 1
+            Dim currentRole As UserRole = UserRole.Employee
+            If CurrentUserContext.IsAuthenticated AndAlso CurrentUserContext.CurrentUser IsNot Nothing Then
+                currentUserId = CurrentUserContext.CurrentUser.UserId
+                currentRole = CurrentUserContext.CurrentUser.Role
+            End If
+
+            If currentRole <> UserRole.Admin AndAlso currentRole <> UserRole.Owner Then
+                Throw New BusinessException("Only Administrators or Owners can permanently delete tasks.", "ERR_UNAUTHORIZED")
+            End If
+
+            Dim counts = Await _taskRepo.GetTaskDependencyCountsAsync(taskId)
+            If counts.Item1 > 0 OrElse counts.Item2 > 0 Then
+                Throw New BusinessException($"This task has {counts.Item1} activity logs and {counts.Item2} discussion threads. It cannot be permanently deleted to preserve the audit trail. It will remain soft-deleted.", "ERR_HAS_DEPENDENCIES")
+            End If
+
+            Dim success = Await _taskRepo.HardDeleteAsync(taskId)
+            If success Then
+                _appLogger.LogInfo($"Task ID {taskId} ({existing.TaskCode}) permanently deleted.", "TaskManagementService")
+                Await _auditLogger.LogAuditAsync(currentUserId, "TASK_HARD_DELETED", "TaskManagement", $"[TASK_HARD_DELETED] Task ID {taskId} ({existing.TaskCode}) permanently deleted.")
+            End If
+            Return success
+        End Function
+
         Private Sub EnsureTaskIsEditable(task As TaskEntity)
             If task.WorkflowState = TaskWorkflowState.Completed OrElse task.WorkflowState = TaskWorkflowState.Delivered OrElse task.WorkflowState = TaskWorkflowState.Closed Then
                 Throw New BusinessException($"Task ID {task.TaskId} is in '{task.WorkflowState}' state and cannot be modified per Task Immutability Policy.", "ERR_TASK_IMMUTABLE")
             End If
         End Sub
 
-        Private Function MapToDto(entity As TaskEntity) As TaskDto
+        Private Function MapToDto(entity As TaskEntity, Optional catDict As Dictionary(Of Integer, Tuple(Of String, String)) = Nothing) As TaskDto
             Dim today = DateTime.UtcNow.Date
             Dim dueDate = entity.TargetDueDate.Date
             Dim daysDiff = CInt((dueDate - today).TotalDays)
+
+            Dim resolvedCategoryCode As String = ""
+            Dim resolvedTaskType As String = entity.Department.ToString()
+
+            If catDict IsNot Nothing AndAlso catDict.ContainsKey(entity.CategoryId) Then
+                resolvedCategoryCode = catDict(entity.CategoryId).Item1
+                resolvedTaskType = catDict(entity.CategoryId).Item2
+            End If
+
+            If String.IsNullOrWhiteSpace(resolvedCategoryCode) Then
+                Dim tmpl = TaskWorkflowTemplateProvider.GetTemplate(entity.Department.ToString(), Nothing)
+                resolvedCategoryCode = tmpl.CategoryCode
+            End If
 
             Return New TaskDto() With {
                 .TaskId = entity.TaskId,
@@ -622,11 +706,12 @@ Namespace Services
                 .Description = entity.Description,
                 .ClientId = entity.ClientId,
                 .CategoryId = entity.CategoryId,
+                .CategoryCode = resolvedCategoryCode,
                 .FinancialYearId = entity.FinancialYearId,
                 .AssignedToUserId = entity.AssignedToUserId,
                 .AssignedByUserId = entity.AssignedByUserId,
                 .Department = entity.Department,
-                .TaskType = entity.Department.ToString(),
+                .TaskType = resolvedTaskType,
                 .Priority = entity.Priority,
                 .WorkflowState = entity.WorkflowState,
                 .AssignmentDate = entity.AssignmentDate,
@@ -635,7 +720,8 @@ Namespace Services
                 .ModifiedOn = entity.ModifiedOn,
                 .DaysRemaining = If(daysDiff > 0, daysDiff, 0),
                 .DaysOverdue = If(daysDiff < 0, Math.Abs(daysDiff), 0),
-                .IsOverdue = daysDiff < 0
+                .IsOverdue = daysDiff < 0,
+                .IsDeleted = entity.IsDeleted
             }
         End Function
     End Class

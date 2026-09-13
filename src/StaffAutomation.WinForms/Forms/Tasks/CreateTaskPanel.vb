@@ -436,7 +436,7 @@ Namespace Forms.Tasks
                     Dim clients = Await _clientService.GetAllClientsAsync(includeDeleted:=False)
                     If clients IsNot Nothing Then
                         For Each c As ClientDto In clients
-                            If c.IsActive Then
+                            If Not c.IsDeleted Then
                                 Dim gstinRef As String = If(Not String.IsNullOrEmpty(c.Gstin), c.Gstin, If(Not String.IsNullOrEmpty(c.PanNumber), c.PanNumber, c.ClientCode))
                                 cboClient.Items.Add(New ClientComboItem With {
                                     .ClientId = c.ClientId,
@@ -456,7 +456,7 @@ Namespace Forms.Tasks
                     Dim users = Await _userRepo.GetAllAsync()
                     If users IsNot Nothing Then
                         For Each u As UserEntity In users
-                            If u.IsActive Then
+                            If Not u.IsDeleted Then
                                 cboAssignee.Items.Add(New UserComboItem With {
                                     .UserId = u.UserId,
                                     .FullName = u.FullName
@@ -636,6 +636,7 @@ Namespace Forms.Tasks
 
                 If newTaskId > 0 Then
                     _appLogger.LogInfo($"Successfully created Task ID {newTaskId} for Client '{clientItem.ClientName}'.", "CreateTaskPanel")
+                    Forms.Common.DataStateTracker.MarkTasksChanged()
                     _isDirty = False
 
                     ' Raise Event with authoritative created TaskId

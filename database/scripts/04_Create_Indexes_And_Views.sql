@@ -66,6 +66,16 @@ BEGIN
 END;
 GO
 
+-- Index 3C: Database-Level Physical Constraint — Maximum 1 Active Running Timer Per User Globally
+IF OBJECT_ID(N'dbo.tbl_TaskActivities', N'U') IS NOT NULL 
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UQ_tbl_TaskActivities_SingleActiveTimerPerUser' AND object_id = OBJECT_ID(N'dbo.tbl_TaskActivities'))
+BEGIN
+    CREATE UNIQUE NONCLUSTERED INDEX UQ_tbl_TaskActivities_SingleActiveTimerPerUser
+    ON dbo.tbl_TaskActivities (UserId)
+    WHERE EndTime IS NULL;
+END;
+GO
+
 -- Index 4: Fast client discussion timeline lookup
 IF OBJECT_ID(N'dbo.tbl_Discussions', N'U') IS NOT NULL 
    AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_tbl_Discussions_ClientId_Timestamp' AND object_id = OBJECT_ID(N'dbo.tbl_Discussions'))

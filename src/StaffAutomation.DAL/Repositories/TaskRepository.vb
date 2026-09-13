@@ -239,6 +239,23 @@ Namespace Repositories
             Throw New BusinessException($"Department '{dept}' ({deptCodeStr}) is not configured in dbo.tbl_Departments master table. Task creation aborted.", "ERR_INVALID_DEPARTMENT")
         End Function
 
+        Public Async Function GetCategoryInfoMapAsync() As Task(Of Dictionary(Of Integer, Tuple(Of String, String))) Implements ITaskRepository.GetCategoryInfoMapAsync
+            Const query As String = "SELECT CategoryId, CategoryCode, CategoryName FROM dbo.tbl_TaskCategories WHERE IsActive = 1;"
+            Dim mapFunc As Func(Of IDataReader, Tuple(Of Integer, String, String)) = Function(r)
+                Dim id As Integer = Convert.ToInt32(r("CategoryId"))
+                Dim code As String = If(r("CategoryCode") IsNot DBNull.Value, r("CategoryCode").ToString(), "")
+                Dim name As String = If(r("CategoryName") IsNot DBNull.Value, r("CategoryName").ToString(), "")
+                Return New Tuple(Of Integer, String, String)(id, code, name)
+            End Function
+
+            Dim list = Await _sqlHelper.ExecuteReaderAsync(query, Nothing, mapFunc)
+            Dim dict As New Dictionary(Of Integer, Tuple(Of String, String))()
+            For Each item In list
+                dict(item.Item1) = New Tuple(Of String, String)(item.Item2, item.Item3)
+            Next
+            Return dict
+        End Function
+
         Public Async Function UpdateTaskAsync(taskItem As TaskEntity) As Task(Of Boolean) Implements ITaskRepository.UpdateTaskAsync
             Dim deptId = Await GetDepartmentIdByEnumAsync(taskItem.Department)
             Dim priorityId = Await GetPriorityIdByEnumAsync(taskItem.Priority)
@@ -358,6 +375,36 @@ Namespace Repositories
             Dim rows = Await _sqlHelper.ExecuteNonQueryAsync(query, params, transaction)
             Return rows > 0
         End Function
+
+        Public Async Function RestoreAsync(taskId As Integer, modifiedBy As Integer) As Task(Of Boolean) Implements ITaskRepository.RestoreAsync
+            Const query As String = "UPDATE dbo.tbl_Tasks SET IsDeleted = 0, ModifiedOn = GETUTCDATE(), ModifiedBy = @ModifiedBy WHERE TaskId = @TaskId AND IsDeleted = 1;"
+            Dim params As SqlParameter() = {
+                New SqlParameter("@ModifiedBy", modifiedBy),
+                New SqlParameter("@TaskId", taskId)
+            }
+            Dim rows = Await _sqlHelper.ExecuteNonQueryAsync(query, params)
+            Return rows > 0
+        End Function
+
+        Public Async Function HardDeleteAsync(taskId As Integer) As Task(Of Boolean) Implements ITaskRepository.HardDeleteAsync
+            Const query As String = "DELETE FROM dbo.tbl_Tasks WHERE TaskId = @TaskId AND IsDeleted = 1;"
+            Dim params As SqlParameter() = {
+                New SqlParameter("@TaskId", taskId)
+            }
+            Dim rows = Await _sqlHelper.ExecuteNonQueryAsync(query, params)
+            Return rows > 0
+        End Function
+
+        Public Async Function GetTaskDependencyCountsAsync(taskId As Integer) As Task(Of Tuple(Of Integer, Integer)) Implements ITaskRepository.GetTaskDependencyCountsAsync
+            Const activityQuery As String = "SELECT COUNT(*) FROM dbo.tbl_TaskActivities WHERE TaskId = @TaskId;"
+            Const discussionQuery As String = "SELECT COUNT(*) FROM dbo.tbl_Discussions WHERE TaskId = @TaskId;"
+            
+            Dim activityCount = Await _sqlHelper.ExecuteScalarAsync(Of Integer)(activityQuery, {New SqlParameter("@TaskId", taskId)})
+            Dim discussionCount = Await _sqlHelper.ExecuteScalarAsync(Of Integer)(discussionQuery, {New SqlParameter("@TaskId", taskId)})
+            
+            Return New Tuple(Of Integer, Integer)(activityCount, discussionCount)
+        End Function
+
 
         Private Function MapStatusIdToWorkflowState(statusId As Integer) As TaskWorkflowState
             If [Enum].IsDefined(GetType(TaskWorkflowState), statusId) Then

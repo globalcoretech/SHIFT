@@ -93,11 +93,37 @@ Namespace Forms.Admin
                                                        End Using
                                                    End Sub
 
+            Dim cardDbConn = CreateActionCard("🌐  Central Database Setup", "Configure central SQL Server hostname, IP address, instance, authentication credentials, and test connection.", "Multi-System Config", Color.FromArgb(37, 99, 235), "Configure →")
+            AddHandler cardDbConn.ActionClicked, Sub(s, e)
+                                                     Dim authz As IAuthorizationService = New AuthorizationService()
+                                                     If Not authz.IsAuthorizedAny(UserRole.Admin, UserRole.Owner) Then
+                                                         FrmInAppAlert.ShowModal(Me.FindForm(), "Access Denied", "Access Denied: Database server configuration is restricted to System Administrators and Firm Owners.", AlertType.WarningAlert, actionText:="OK")
+                                                         Return
+                                                     End If
+                                                     Using dlg As New FrmDatabaseConnectionConfig()
+                                                         dlg.ShowDialog(Me.FindForm())
+                                                     End Using
+                                                 End Sub
+
+            Dim cardDevices = CreateActionCard("📱  Device Approvals", "Review and approve login access for new staff devices.", "Pending Approvals", Color.FromArgb(16, 185, 129), "Review Devices →")
+            AddHandler cardDevices.ActionClicked, Sub(s, e)
+                                                       Dim authz As IAuthorizationService = New AuthorizationService()
+                                                       If Not authz.IsAuthorizedAny(UserRole.Admin, UserRole.Owner) Then
+                                                           FrmInAppAlert.ShowModal(Me.FindForm(), "Access Denied", "Access Denied: Device approvals are restricted to Administrators and Firm Owners.", AlertType.WarningAlert, actionText:="OK")
+                                                           Return
+                                                       End If
+                                                       Using dlg As New FrmDeviceApprovals()
+                                                           dlg.ShowDialog(Me.FindForm())
+                                                       End Using
+                                                   End Sub
+
             flowContainer.Controls.Add(cardUsers)
             flowContainer.Controls.Add(cardClients)
             flowContainer.Controls.Add(cardAttendance)
             flowContainer.Controls.Add(cardDatabase)
+            flowContainer.Controls.Add(cardDbConn)
             flowContainer.Controls.Add(cardReports)
+            flowContainer.Controls.Add(cardDevices)
             flowContainer.Controls.Add(cardSecurity)
 
             ' Dynamic card width recalculation on container resize for 1366x768 support

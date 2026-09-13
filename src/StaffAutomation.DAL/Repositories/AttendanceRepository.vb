@@ -28,9 +28,15 @@ Namespace Repositories
                 Const alterQuery As String = "IF EXISTS (SELECT 1 FROM sys.tables WHERE name = N'tbl_Attendance') " &
                                             "BEGIN " &
                                             "    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.tbl_Attendance') AND name = N'BreakStartTime') " &
-                                            "    BEGIN " &
                                             "        ALTER TABLE dbo.tbl_Attendance ADD BreakStartTime DATETIME2 NULL; " &
-                                            "    END " &
+                                            "    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.tbl_Attendance') AND name = N'IsManuallyCorrected') " &
+                                            "        ALTER TABLE dbo.tbl_Attendance ADD IsManuallyCorrected BIT NOT NULL DEFAULT 0; " &
+                                            "    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.tbl_Attendance') AND name = N'CorrectionReason') " &
+                                            "        ALTER TABLE dbo.tbl_Attendance ADD CorrectionReason NVARCHAR(500) NULL; " &
+                                            "    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.tbl_Attendance') AND name = N'CorrectedBy') " &
+                                            "        ALTER TABLE dbo.tbl_Attendance ADD CorrectedBy INT NULL; " &
+                                            "    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.tbl_Attendance') AND name = N'CorrectedOn') " &
+                                            "        ALTER TABLE dbo.tbl_Attendance ADD CorrectedOn DATETIME2 NULL; " &
                                             "END;"
                 Await _sqlHelper.ExecuteNonQueryAsync(alterQuery, Array.Empty(Of SqlParameter)())
                 _columnEnsured = True
@@ -41,7 +47,7 @@ Namespace Repositories
 
         Public Async Function GetTodayAttendanceAsync(userId As Integer, attendanceDate As DateTime) As Task(Of AttendanceEntity) Implements IAttendanceRepository.GetTodayAttendanceAsync
             Await EnsureBreakStartTimeColumnExistsAsync()
-            Const query As String = "SELECT AttendanceId, UserId, AttendanceDate, ClockInTime, ClockOutTime, BreakStartTime, TotalBreakMinutes, TotalWorkingMinutes, Status, ClientIP, CreatedOn, CreatedBy " &
+            Const query As String = "SELECT AttendanceId, UserId, AttendanceDate, ClockInTime, ClockOutTime, BreakStartTime, TotalBreakMinutes, TotalWorkingMinutes, Status, ClientIP, CreatedOn, CreatedBy, IsManuallyCorrected, CorrectionReason, CorrectedBy, CorrectedOn " &
                                    "FROM dbo.tbl_Attendance WHERE UserId = @UserId AND AttendanceDate = @AttendanceDate;"
             Dim params As SqlParameter() = {
                 New SqlParameter("@UserId", userId),
@@ -52,7 +58,8 @@ Namespace Repositories
         End Function
 
         Public Async Function GetAttendanceHistoryAsync(Optional startDate As Nullable(Of DateTime) = Nothing, Optional endDate As Nullable(Of DateTime) = Nothing) As Task(Of List(Of AttendanceEntity)) Implements IAttendanceRepository.GetAttendanceHistoryAsync
-            Dim query As String = "SELECT AttendanceId, UserId, AttendanceDate, ClockInTime, ClockOutTime, BreakStartTime, TotalBreakMinutes, TotalWorkingMinutes, Status, ClientIP, CreatedOn, CreatedBy " &
+            Await EnsureBreakStartTimeColumnExistsAsync()
+            Dim query As String = "SELECT AttendanceId, UserId, AttendanceDate, ClockInTime, ClockOutTime, BreakStartTime, TotalBreakMinutes, TotalWorkingMinutes, Status, ClientIP, CreatedOn, CreatedBy, IsManuallyCorrected, CorrectionReason, CorrectedBy, CorrectedOn " &
                                   "FROM dbo.tbl_Attendance "
             Dim params As New List(Of SqlParameter)()
             Dim whereClause As New List(Of String)()
@@ -132,10 +139,10 @@ Namespace Repositories
         End Function
 
         Public Async Function ResetTodayAttendanceAsync(userId As Integer, attendanceDate As DateTime) As Task(Of Boolean) Implements IAttendanceRepository.ResetTodayAttendanceAsync
-            Const query As String = "DELETE FROM dbo.tbl_Attendance WHERE UserId = @UserId AND AttendanceDate = @AttendanceDate;"
+            ' Safety Check: Force deletion to only affect the current server date regardless of passed parameter
+            Const query As String = "DELETE FROM dbo.tbl_Attendance WHERE UserId = @UserId AND CAST(AttendanceDate AS date) = CAST(GETDATE() AS date);"
             Dim params As SqlParameter() = {
-                New SqlParameter("@UserId", userId),
-                New SqlParameter("@AttendanceDate", attendanceDate.Date)
+                New SqlParameter("@UserId", userId)
             }
             Dim rowsAffected = Await _sqlHelper.ExecuteNonQueryAsync(query, params)
             Return rowsAffected > 0
@@ -163,39 +170,52 @@ Namespace Repositories
             Return Await _sqlHelper.ExecuteReaderAsync(Of AttendanceEntity)(query, params.ToArray(), AddressOf MapAttendanceEntity)
         End Function
 
-        Public Async Function CorrectAttendanceByAdminAsync(attendanceId As Integer, clockInTime As DateTime, clockOutTime As Nullable(Of DateTime), totalBreakMinutes As Integer, status As String, reason As String, adminUserId As Integer) As Task(Of Boolean) Implements IAttendanceRepository.CorrectAttendanceByAdminAsync
-            Const query As String = "UPDATE dbo.tbl_Attendance " &
-                                   "SET ClockInTime = @ClockInTime, " &
-                                   "    ClockOutTime = @ClockOutTime, " &
-                                   "    TotalBreakMinutes = @TotalBreakMinutes, " &
-                                   "    TotalWorkingMinutes = CASE WHEN @ClockOutTime IS NULL THEN 0 ELSE (CASE WHEN DATEDIFF(MINUTE, @ClockInTime, @ClockOutTime) - @TotalBreakMinutes < 0 THEN 0 ELSE DATEDIFF(MINUTE, @ClockInTime, @ClockOutTime) - @TotalBreakMinutes END) END, " &
-                                   "    Status = @Status, " &
-                                   "    IsManuallyCorrected = 1, " &
-                                   "    CorrectionReason = @Reason, " &
-                                   "    CorrectedBy = @AdminUserId, " &
-                                   "    CorrectedOn = GETUTCDATE() " &
-                                   "WHERE AttendanceId = @AttendanceId;"
+        Public Async Function CorrectAttendanceByAdminAsync(attendanceId As Integer, userId As Integer, attendanceDate As DateTime, clockInTime As DateTime, clockOutTime As Nullable(Of DateTime), totalBreakMinutes As Integer, status As String, reason As String, adminUserId As Integer) As Task(Of Boolean) Implements IAttendanceRepository.CorrectAttendanceByAdminAsync
+            Await EnsureBreakStartTimeColumnExistsAsync()
+
+            Const query As String = "IF EXISTS (SELECT 1 FROM dbo.tbl_Attendance WHERE (@AttendanceId > 0 AND AttendanceId = @AttendanceId) OR (UserId = @UserId AND AttendanceDate = @AttendanceDate)) " &
+                                   "BEGIN " &
+                                   "    UPDATE dbo.tbl_Attendance " &
+                                   "    SET ClockInTime = @ClockInTime, " &
+                                   "        ClockOutTime = @ClockOutTime, " &
+                                   "        TotalBreakMinutes = @TotalBreakMinutes, " &
+                                   "        TotalWorkingMinutes = CASE WHEN @ClockOutTime IS NULL THEN 0 ELSE (CASE WHEN DATEDIFF(MINUTE, @ClockInTime, @ClockOutTime) - @TotalBreakMinutes < 0 THEN 0 ELSE DATEDIFF(MINUTE, @ClockInTime, @ClockOutTime) - @TotalBreakMinutes END) END, " &
+                                   "        Status = @Status, " &
+                                   "        IsManuallyCorrected = 1, " &
+                                   "        CorrectionReason = @Reason, " &
+                                   "        CorrectedBy = @AdminUserId, " &
+                                   "        CorrectedOn = GETUTCDATE() " &
+                                   "    WHERE (@AttendanceId > 0 AND AttendanceId = @AttendanceId) OR (UserId = @UserId AND AttendanceDate = @AttendanceDate); " &
+                                   "END " &
+                                   "ELSE " &
+                                   "BEGIN " &
+                                   "    INSERT INTO dbo.tbl_Attendance (UserId, AttendanceDate, ClockInTime, ClockOutTime, BreakStartTime, TotalBreakMinutes, TotalWorkingMinutes, Status, ClientIP, CreatedOn, CreatedBy, IsManuallyCorrected, CorrectionReason, CorrectedBy, CorrectedOn) " &
+                                   "    VALUES (@UserId, @AttendanceDate, @ClockInTime, @ClockOutTime, NULL, @TotalBreakMinutes, " &
+                                   "            CASE WHEN @ClockOutTime IS NULL THEN 0 ELSE (CASE WHEN DATEDIFF(MINUTE, @ClockInTime, @ClockOutTime) - @TotalBreakMinutes < 0 THEN 0 ELSE DATEDIFF(MINUTE, @ClockInTime, @ClockOutTime) - @TotalBreakMinutes END) END, " &
+                                   "            @Status, '127.0.0.1', GETUTCDATE(), @AdminUserId, 1, @Reason, @AdminUserId, GETUTCDATE()); " &
+                                   "END;"
             Dim params As SqlParameter() = {
+                New SqlParameter("@AttendanceId", attendanceId),
+                New SqlParameter("@UserId", userId),
+                New SqlParameter("@AttendanceDate", attendanceDate.Date),
                 New SqlParameter("@ClockInTime", clockInTime),
                 New SqlParameter("@ClockOutTime", If(clockOutTime.HasValue, CType(clockOutTime.Value, Object), DBNull.Value)),
                 New SqlParameter("@TotalBreakMinutes", totalBreakMinutes),
                 New SqlParameter("@Status", status),
                 New SqlParameter("@Reason", If(String.IsNullOrEmpty(reason), "Admin Manual Correction", reason)),
-                New SqlParameter("@AdminUserId", adminUserId),
-                New SqlParameter("@AttendanceId", attendanceId)
+                New SqlParameter("@AdminUserId", adminUserId)
             }
             Dim rowsAffected = Await _sqlHelper.ExecuteNonQueryAsync(query, params)
-            Return rowsAffected > 0
+            Return True
         End Function
 
         Private Function MapAttendanceEntity(reader As IDataReader) As AttendanceEntity
             Dim breakStartVal As Nullable(Of DateTime) = Nothing
             Try
-                If reader("BreakStartTime") IsNot DBNull.Value Then
+                If HasColumn(reader, "BreakStartTime") AndAlso reader("BreakStartTime") IsNot DBNull.Value Then
                     breakStartVal = Convert.ToDateTime(reader("BreakStartTime"))
                 End If
             Catch ex As Exception
-                ' Column might not exist in old schemas during transition
             End Try
 
             Dim isCorrected As Boolean = False
@@ -204,39 +224,48 @@ Namespace Repositories
             Dim corrOn As Nullable(Of DateTime) = Nothing
 
             Try
-                If reader("IsManuallyCorrected") IsNot DBNull.Value Then
+                If HasColumn(reader, "IsManuallyCorrected") AndAlso reader("IsManuallyCorrected") IsNot DBNull.Value Then
                     isCorrected = Convert.ToBoolean(reader("IsManuallyCorrected"))
                 End If
-                If reader("CorrectionReason") IsNot DBNull.Value Then
+                If HasColumn(reader, "CorrectionReason") AndAlso reader("CorrectionReason") IsNot DBNull.Value Then
                     corrReason = Convert.ToString(reader("CorrectionReason"))
                 End If
-                If reader("CorrectedBy") IsNot DBNull.Value Then
+                If HasColumn(reader, "CorrectedBy") AndAlso reader("CorrectedBy") IsNot DBNull.Value Then
                     corrBy = Convert.ToInt32(reader("CorrectedBy"))
                 End If
-                If reader("CorrectedOn") IsNot DBNull.Value Then
+                If HasColumn(reader, "CorrectedOn") AndAlso reader("CorrectedOn") IsNot DBNull.Value Then
                     corrOn = Convert.ToDateTime(reader("CorrectedOn"))
                 End If
             Catch ex As Exception
             End Try
 
             Return New AttendanceEntity() With {
-                .AttendanceId = Convert.ToInt32(reader("AttendanceId")),
-                .UserId = Convert.ToInt32(reader("UserId")),
-                .AttendanceDate = Convert.ToDateTime(reader("AttendanceDate")),
-                .ClockInTime = Convert.ToDateTime(reader("ClockInTime")),
+                .AttendanceId = If(reader("AttendanceId") Is DBNull.Value, 0, Convert.ToInt32(reader("AttendanceId"))),
+                .UserId = If(reader("UserId") Is DBNull.Value, 0, Convert.ToInt32(reader("UserId"))),
+                .AttendanceDate = If(reader("AttendanceDate") Is DBNull.Value, DateTime.Today, Convert.ToDateTime(reader("AttendanceDate"))),
+                .ClockInTime = If(reader("ClockInTime") Is DBNull.Value, DateTime.MinValue, Convert.ToDateTime(reader("ClockInTime"))),
                 .ClockOutTime = If(reader("ClockOutTime") Is DBNull.Value, CType(Nothing, Nullable(Of DateTime)), Convert.ToDateTime(reader("ClockOutTime"))),
                 .BreakStartTime = breakStartVal,
-                .TotalBreakMinutes = Convert.ToInt32(reader("TotalBreakMinutes")),
-                .TotalWorkingMinutes = Convert.ToInt32(reader("TotalWorkingMinutes")),
-                .Status = Convert.ToString(reader("Status")),
+                .TotalBreakMinutes = If(reader("TotalBreakMinutes") Is DBNull.Value, 0, Convert.ToInt32(reader("TotalBreakMinutes"))),
+                .TotalWorkingMinutes = If(reader("TotalWorkingMinutes") Is DBNull.Value, 0, Convert.ToInt32(reader("TotalWorkingMinutes"))),
+                .Status = If(reader("Status") Is DBNull.Value, String.Empty, Convert.ToString(reader("Status"))),
                 .ClientIP = If(reader("ClientIP") Is DBNull.Value, String.Empty, Convert.ToString(reader("ClientIP"))),
-                .CreatedOn = Convert.ToDateTime(reader("CreatedOn")),
-                .CreatedBy = Convert.ToInt32(reader("CreatedBy")),
+                .CreatedOn = If(reader("CreatedOn") Is DBNull.Value, DateTime.UtcNow, Convert.ToDateTime(reader("CreatedOn"))),
+                .CreatedBy = If(reader("CreatedBy") Is DBNull.Value, 0, Convert.ToInt32(reader("CreatedBy"))),
                 .IsManuallyCorrected = isCorrected,
                 .CorrectionReason = corrReason,
                 .CorrectedBy = corrBy,
                 .CorrectedOn = corrOn
             }
+        End Function
+
+        Private Function HasColumn(reader As IDataReader, columnName As String) As Boolean
+            For i As Integer = 0 To reader.FieldCount - 1
+                If String.Equals(reader.GetName(i), columnName, StringComparison.OrdinalIgnoreCase) Then
+                    Return True
+                End If
+            Next
+            Return False
         End Function
     End Class
 End Namespace

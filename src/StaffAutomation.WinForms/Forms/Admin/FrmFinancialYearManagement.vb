@@ -222,8 +222,8 @@ Namespace Forms.Admin
                 Return
             End If
 
-            Dim result = MessageBox.Show($"Are you sure you want to set '{item.FYCode}' as the active financial year for the firm?", "Confirm Activation", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
-            If result <> DialogResult.Yes Then Return
+            Dim result = FrmInAppAlert.ShowModal(Me, "Confirm Activation", $"Are you sure you want to set '{item.FYCode}' as the active financial year for the firm?", AlertType.WarningAlert, actionText:="Yes, Activate", showCancel:=True, cancelText:="Cancel")
+            If result <> DialogResult.OK Then Return
 
             Try
                 Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)
@@ -245,8 +245,9 @@ Namespace Forms.Admin
             End If
 
             Dim actionName = If(lockTarget, "Lock", "Unlock")
-            Dim result = MessageBox.Show($"Are you sure you want to {actionName.ToLower()} Financial Year '{item.FYCode}'?", $"Confirm {actionName}", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
-            If result <> DialogResult.Yes Then Return
+            Dim msg = $"Are you sure you want to {actionName.ToLower()} Financial Year '{item.FYCode}'?{If(lockTarget, " This will prevent any further entries for this period.", "")}"
+            Dim result = FrmInAppAlert.ShowModal(Me, $"Confirm {actionName}", msg, AlertType.WarningAlert, actionText:=$"Yes, {actionName}", showCancel:=True, cancelText:="Cancel")
+            If result <> DialogResult.OK Then Return
 
             Try
                 Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 1)

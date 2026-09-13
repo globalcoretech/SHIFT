@@ -15,6 +15,6 @@ Namespace Interfaces
         Function EndLunchBreakAsync(attendanceId As Integer, totalBreakMinutes As Integer) As Task(Of Boolean)
         Function ResetTodayAttendanceAsync(userId As Integer, attendanceDate As DateTime) As Task(Of Boolean)
         Function GetUserAttendanceHistoryAsync(userId As Integer, Optional startDate As Nullable(Of DateTime) = Nothing, Optional endDate As Nullable(Of DateTime) = Nothing) As Task(Of List(Of AttendanceEntity))
-        Function CorrectAttendanceByAdminAsync(attendanceId As Integer, clockInTime As DateTime, clockOutTime As Nullable(Of DateTime), totalBreakMinutes As Integer, status As String, reason As String, adminUserId As Integer) As Task(Of Boolean)
+        Function CorrectAttendanceByAdminAsync(attendanceId As Integer, userId As Integer, attendanceDate As DateTime, clockInTime As DateTime, clockOutTime As Nullable(Of DateTime), totalBreakMinutes As Integer, status As String, reason As String, adminUserId As Integer) As Task(Of Boolean)
     End Interface
 End Namespace

@@ -127,7 +127,8 @@ Namespace Forms.Main
             Me.SuspendLayout()
 
             Me.Text = If(_clientId = 0, "Add New Client", $"Edit Client: {_clientDto?.ClientName}")
-            Me.Size = New Size(860, 700)
+            Me.Size = New Size(860, 680)
+            Me.MinimumSize = New Size(780, 560)
             Me.StartPosition = FormStartPosition.CenterParent
             Me.FormBorderStyle = FormBorderStyle.FixedDialog
             Me.MaximizeBox = False
@@ -504,12 +505,22 @@ Namespace Forms.Main
         End Sub
 
         Private Sub FrmAddEditClient_Shown(sender As Object, e As EventArgs)
+            ApplyInputStyles()
             PositionFooterControls()
             UpdateFetchButtonState()
             If _clientId = 0 Then
                 txtGstin.Focus()
                 txtGstin.Select(0, 0)
             End If
+        End Sub
+
+        Private Sub ApplyInputStyles()
+            Dim inputs() As Control = {txtGstin, txtCode, txtName, txtPan, cboEntityType, cboGstType, txtAddress, txtDistrict, cboState, txtPincode, txtContact, txtPhone, txtEmail, cboDept}
+            For Each ctrl As Control In inputs
+                If ctrl IsNot Nothing Then
+                    ThemeConstants.ApplyStandardInputStyle(ctrl)
+                End If
+            Next
         End Sub
 
         Private Sub PositionFooterControls()
@@ -943,7 +954,7 @@ Namespace Forms.Main
                     .ContactPerson = txtContact.Text.Trim(),
                     .Phone = txtPhone.Text.Trim(),
                     .Email = txtEmail.Text.Trim(),
-                    .Department = CType(If(cboDept.SelectedItem, DepartmentType.IncomeTax), DepartmentType),
+                    .Department = If(cboDept.SelectedItem Is Nothing, CType(Nothing, Nullable(Of DepartmentType)), CType(cboDept.SelectedItem, Nullable(Of DepartmentType))),
                     .IsActive = chkActive.Checked,
                     .IsLiveApiData = _isLiveApiVerified
                 }
@@ -954,6 +965,7 @@ Namespace Forms.Main
                     Await _clientService.UpdateClientAsync(clientDto)
                 End If
 
+                Forms.Common.DataStateTracker.MarkClientsChanged()
                 ' Success Behaviour (Concise Toast Notification)
                 _hasUnsavedChanges = False
                 AppNotificationHelper.ShowSuccess($"Client saved successfully.{Environment.NewLine}{Environment.NewLine}• Business Name: {clientDto.ClientName}{Environment.NewLine}• Client Code: {clientDto.ClientCode}{Environment.NewLine}• GSTIN: {If(String.IsNullOrEmpty(clientDto.Gstin), "N/A", clientDto.Gstin)}", "Client Saved", Me)
@@ -995,6 +1007,7 @@ Namespace Forms.Main
                 Try
                     Dim deleted = Await _clientService.SoftDeleteClientAsync(_clientId)
                     If deleted Then
+                        Forms.Common.DataStateTracker.MarkClientsChanged()
                         _hasUnsavedChanges = False
                         AppNotificationHelper.ShowSuccess("Client record archived successfully.", "Client Archived", Me)
                         Me.DialogResult = DialogResult.OK

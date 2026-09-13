@@ -168,8 +168,11 @@ Namespace Forms.Auth
             Dim hasher As New PasswordHasher()
             Dim appLogger As IAppLogger = New AppLogger(config)
             Dim auditLogger As New AuditLogger(sqlHelper)
+            
+            Dim deviceRepo As DAL.Interfaces.IDeviceRepository = New DeviceRepository(sqlHelper)
+            Dim deviceService As IDeviceService = New DeviceService(deviceRepo, userRepo)
 
-            Return New AuthService(userRepo, hasher, appLogger, auditLogger)
+            Return New AuthService(userRepo, hasher, appLogger, auditLogger, deviceService)
         End Function
     End Class
 End Namespace

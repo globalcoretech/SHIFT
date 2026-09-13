@@ -22,7 +22,7 @@ Namespace Repositories
         End Sub
 
         Public Async Function GetByIdAsync(discussionId As Integer) As Task(Of DiscussionEntity) Implements IDiscussionRepository.GetByIdAsync
-            Const query As String = "SELECT DiscussionId, ClientId, TaskId, UserId, ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy " &
+            Const query As String = "SELECT DiscussionId, ClientId, TaskId, UserId, CommunicationTypeId AS ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy " &
                                    "FROM dbo.tbl_Discussions WHERE DiscussionId = @DiscussionId;"
             Dim params As SqlParameter() = {New SqlParameter("@DiscussionId", discussionId)}
             Dim list = Await _sqlHelper.ExecuteReaderAsync(query, params, AddressOf MapDiscussionEntity)
@@ -30,35 +30,39 @@ Namespace Repositories
         End Function
 
         Public Async Function GetDiscussionsByClientAsync(clientId As Integer) As Task(Of List(Of DiscussionEntity)) Implements IDiscussionRepository.GetDiscussionsByClientAsync
-            Const query As String = "SELECT DiscussionId, ClientId, TaskId, UserId, ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy " &
+            Const query As String = "SELECT DiscussionId, ClientId, TaskId, UserId, CommunicationTypeId AS ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy " &
                                    "FROM dbo.tbl_Discussions WHERE ClientId = @ClientId ORDER BY DiscussionTimestamp DESC;"
             Dim params As SqlParameter() = {New SqlParameter("@ClientId", clientId)}
             Return Await _sqlHelper.ExecuteReaderAsync(query, params, AddressOf MapDiscussionEntity)
         End Function
 
         Public Async Function GetDiscussionsByTaskAsync(taskId As Integer) As Task(Of List(Of DiscussionEntity)) Implements IDiscussionRepository.GetDiscussionsByTaskAsync
-            Const query As String = "SELECT DiscussionId, ClientId, TaskId, UserId, ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy " &
+            Const query As String = "SELECT DiscussionId, ClientId, TaskId, UserId, CommunicationTypeId AS ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy " &
                                    "FROM dbo.tbl_Discussions WHERE TaskId = @TaskId ORDER BY DiscussionTimestamp DESC;"
             Dim params As SqlParameter() = {New SqlParameter("@TaskId", taskId)}
             Return Await _sqlHelper.ExecuteReaderAsync(query, params, AddressOf MapDiscussionEntity)
         End Function
 
         Public Async Function AddAsync(discussion As DiscussionEntity) As Task(Of Integer) Implements IDiscussionRepository.AddAsync
-            Const query As String = "INSERT INTO dbo.tbl_Discussions (ClientId, TaskId, UserId, ChannelId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy) " &
-                                   "VALUES (@ClientId, @TaskId, @UserId, @ChannelId, @OutcomeId, @DiscussionNotes, @DurationMinutes, @DiscussionTimestamp, GETUTCDATE(), @CreatedBy); " &
+            Const query As String = "INSERT INTO dbo.tbl_Discussions (ClientId, TaskId, UserId, CommunicationTypeId, OutcomeId, DiscussionNotes, DurationMinutes, DiscussionTimestamp, CreatedOn, CreatedBy) " &
+                                   "VALUES (@ClientId, @TaskId, @UserId, @CommunicationTypeId, @OutcomeId, @DiscussionNotes, @DurationMinutes, @DiscussionTimestamp, GETUTCDATE(), @CreatedBy); " &
                                    "SELECT SCOPE_IDENTITY();"
             Dim params As SqlParameter() = {
                 New SqlParameter("@ClientId", discussion.ClientId),
                 New SqlParameter("@TaskId", If(discussion.TaskId.HasValue, CObj(discussion.TaskId.Value), DBNull.Value)),
                 New SqlParameter("@UserId", discussion.UserId),
-                New SqlParameter("@ChannelId", CInt(discussion.Channel)),
+                New SqlParameter("@CommunicationTypeId", CInt(discussion.Channel)),
                 New SqlParameter("@OutcomeId", CInt(discussion.Outcome)),
                 New SqlParameter("@DiscussionNotes", discussion.DiscussionNotes),
                 New SqlParameter("@DurationMinutes", discussion.DurationMinutes),
                 New SqlParameter("@DiscussionTimestamp", discussion.DiscussionTimestamp),
                 New SqlParameter("@CreatedBy", discussion.CreatedBy)
             }
-            Return Await _sqlHelper.ExecuteScalarAsync(Of Integer)(query, params)
+            Dim resultObj = Await _sqlHelper.ExecuteScalarAsync(Of Object)(query, params)
+            If resultObj IsNot Nothing AndAlso Not Convert.IsDBNull(resultObj) Then
+                Return Convert.ToInt32(resultObj)
+            End If
+            Return 0
         End Function
 
         Private Function MapDiscussionEntity(reader As IDataReader) As DiscussionEntity

@@ -10,8 +10,11 @@ Namespace Interfaces
     Public Interface IClientService
         Function GetClientByIdAsync(clientId As Integer) As Task(Of ClientDto)
         Function GetAllClientsAsync(Optional department As Nullable(Of DepartmentType) = Nothing, Optional includeDeleted As Boolean = False) As Task(Of List(Of ClientDto))
+        Function GetClientsByAssignedUserAsync(userId As Integer) As Task(Of List(Of ClientDto))
         Function CreateClientAsync(clientDto As ClientDto) As Task(Of Integer)
+        Function CreateClientsBulkAsync(clients As List(Of ClientDto)) As Task(Of Integer)
         Function UpdateClientAsync(clientDto As ClientDto) As Task(Of Boolean)
         Function SoftDeleteClientAsync(clientId As Integer) As Task(Of Boolean)
+        Function ReactivateClientAsync(clientId As Integer) As Task(Of Boolean)
     End Interface
 End Namespace

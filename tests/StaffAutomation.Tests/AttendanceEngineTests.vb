@@ -88,9 +88,17 @@ Namespace StaffAutomation.Tests
             Return Task.FromResult(userRecords)
         End Function
 
-        Public Function CorrectAttendanceByAdminAsync(attendanceId As Integer, clockInTime As DateTime, clockOutTime As Nullable(Of DateTime), totalBreakMinutes As Integer, status As String, reason As String, adminUserId As Integer) As Task(Of Boolean) Implements IAttendanceRepository.CorrectAttendanceByAdminAsync
-            Dim rec = Records.Find(Function(r) r.AttendanceId = attendanceId)
-            If rec Is Nothing Then Return Task.FromResult(False)
+        Public Function CorrectAttendanceByAdminAsync(attendanceId As Integer, userId As Integer, attendanceDate As DateTime, clockInTime As DateTime, clockOutTime As Nullable(Of DateTime), totalBreakMinutes As Integer, status As String, reason As String, adminUserId As Integer) As Task(Of Boolean) Implements IAttendanceRepository.CorrectAttendanceByAdminAsync
+            Dim rec = Records.Find(Function(r) (attendanceId > 0 AndAlso r.AttendanceId = attendanceId) OrElse (r.UserId = userId AndAlso r.AttendanceDate.Date = attendanceDate.Date))
+            If rec Is Nothing Then
+                rec = New AttendanceEntity() With {
+                    .AttendanceId = _nextId,
+                    .UserId = userId,
+                    .AttendanceDate = attendanceDate.Date
+                }
+                _nextId += 1
+                Records.Add(rec)
+            End If
             rec.ClockInTime = clockInTime
             rec.ClockOutTime = clockOutTime
             rec.TotalBreakMinutes = totalBreakMinutes
@@ -155,6 +163,10 @@ Namespace StaffAutomation.Tests
 
     Public Class MockSqlHelper
         Implements ISqlHelper
+
+        Public Function GetConnection() As IDbConnection Implements ISqlHelper.GetConnection
+            Return Nothing
+        End Function
 
         Public Function ExecuteNonQueryAsync(commandText As String, parameters As IDbDataParameter(), Optional transaction As IDbTransaction = Nothing) As Task(Of Integer) Implements ISqlHelper.ExecuteNonQueryAsync
             Return Task.FromResult(1)
@@ -397,6 +409,172 @@ Namespace StaffAutomation.Tests
             If finalDbRec.BreakStartTime.HasValue Then
                 Throw New InvalidOperationException("Persisted Break Test Failed: BreakStartTime was not cleared in DB after EndLunchBreakAsync.")
             End If
+        End Function
+
+        <TestMethod>
+        Public Async Function TestInspectAttendanceDataAndNullSafetyAsync() As Task
+            Dim repo As New MockAttendanceRepository()
+            Dim userRepo As New MockUserRepository()
+            Dim appLogger As New MockAppLogger()
+            Dim sqlHelper As New MockSqlHelper()
+            Dim auditLogger As New AuditLogger(sqlHelper)
+            Dim service As IAttendanceService = New AttendanceService(repo, userRepo, appLogger, auditLogger)
+
+            ' 1. Test Inspect attendance for employee with NO punch record (Not Punched)
+            Dim notPunchedUserId As Integer = 99
+            Dim emptyRec = Await service.GetTodayAttendanceForUserAsync(notPunchedUserId)
+            Assert.IsNull(emptyRec, "GetTodayAttendanceForUserAsync should return Nothing for un-punched employee.")
+
+            Dim emptyHistory = Await service.GetUserAttendanceHistoryAsync(notPunchedUserId)
+            Assert.IsNotNull(emptyHistory, "GetUserAttendanceHistoryAsync should return empty list, not Nothing.")
+            Assert.AreEqual(0, emptyHistory.Count, "GetUserAttendanceHistoryAsync history count should be 0 for un-punched employee.")
+
+            ' 2. Test Inspect attendance for valid employee WITH attendance data
+            Dim punchedUserId As Integer = 1
+            Await service.ClockInUserAsync(punchedUserId, "127.0.0.1")
+
+            Dim todayRec = Await service.GetTodayAttendanceForUserAsync(punchedUserId)
+            Assert.IsNotNull(todayRec, "GetTodayAttendanceForUserAsync should return AttendanceDto for punched employee.")
+            Assert.AreEqual(punchedUserId, todayRec.UserId)
+            Assert.IsTrue(todayRec.Status = "Present" OrElse todayRec.Status = "Late", $"ClockIn status should be 'Present' or 'Late', but got '{todayRec.Status}'.")
+
+            ' 3. Test null / optional attendance values safety
+            ' Add a historical record with null optional fields to repo
+            Dim nullValEntity As New AttendanceEntity() With {
+                .AttendanceId = 50,
+                .UserId = punchedUserId,
+                .AttendanceDate = DateTime.Today.AddDays(-1),
+                .ClockInTime = DateTime.Today.AddDays(-1).AddHours(9),
+                .ClockOutTime = Nothing,
+                .BreakStartTime = Nothing,
+                .TotalBreakMinutes = 0,
+                .TotalWorkingMinutes = 0,
+                .Status = Nothing,
+                .ClientIP = Nothing,
+                .CreatedOn = DateTime.UtcNow,
+                .CreatedBy = punchedUserId,
+                .IsManuallyCorrected = False,
+                .CorrectionReason = Nothing
+            }
+            repo.Records.Add(nullValEntity)
+
+            Dim userHistory = Await service.GetUserAttendanceHistoryAsync(punchedUserId)
+            Assert.IsTrue(userHistory.Count > 0, "GetUserAttendanceHistoryAsync should return history records including null-value entity.")
+
+            Dim nullDto = userHistory.Find(Function(h) h.AttendanceId = 50)
+            Assert.IsNotNull(nullDto, "Null-value entity should map safely to AttendanceDto.")
+            Assert.AreEqual(String.Empty, nullDto.Status, "Null status should map safely to empty string.")
+        End Function
+
+        <TestMethod>
+        Public Async Function TestCaseA_EmployeeWithValidPunchInAndPunchOutAsync() As Task
+            Dim repo As New MockAttendanceRepository()
+            Dim userRepo As New MockUserRepository()
+            Dim appLogger As New MockAppLogger()
+            Dim sqlHelper As New MockSqlHelper()
+            Dim auditLogger As New AuditLogger(sqlHelper)
+            Dim service As IAttendanceService = New AttendanceService(repo, userRepo, appLogger, auditLogger)
+
+            Dim userId As Integer = 10
+            Dim today = DateTime.Today
+            Dim entity As New AttendanceEntity() With {
+                .AttendanceId = 101,
+                .UserId = userId,
+                .AttendanceDate = today,
+                .ClockInTime = today.AddHours(9),
+                .ClockOutTime = today.AddHours(17),
+                .TotalBreakMinutes = 60,
+                .TotalWorkingMinutes = 420,
+                .Status = "Completed"
+            }
+            repo.Records.Add(entity)
+
+            Dim todayRec = Await service.GetTodayAttendanceForUserAsync(userId)
+            Assert.IsNotNull(todayRec)
+            Assert.IsTrue(todayRec.ClockOutTime.HasValue)
+            Assert.AreEqual("Completed", todayRec.Status)
+            Assert.AreEqual(420, todayRec.TotalWorkingMinutes)
+        End Function
+
+        <TestMethod>
+        Public Async Function TestCaseB_EmployeeWithPunchInButNoPunchOutAsync() As Task
+            Dim repo As New MockAttendanceRepository()
+            Dim userRepo As New MockUserRepository()
+            Dim appLogger As New MockAppLogger()
+            Dim sqlHelper As New MockSqlHelper()
+            Dim auditLogger As New AuditLogger(sqlHelper)
+            Dim service As IAttendanceService = New AttendanceService(repo, userRepo, appLogger, auditLogger)
+
+            Dim userId As Integer = 11
+            Dim today = DateTime.Today
+            Dim entity As New AttendanceEntity() With {
+                .AttendanceId = 102,
+                .UserId = userId,
+                .AttendanceDate = today,
+                .ClockInTime = today.AddHours(9),
+                .ClockOutTime = Nothing,
+                .TotalBreakMinutes = 0,
+                .TotalWorkingMinutes = 0,
+                .Status = "Present"
+            }
+            repo.Records.Add(entity)
+
+            Dim todayRec = Await service.GetTodayAttendanceForUserAsync(userId)
+            Assert.IsNotNull(todayRec)
+            Assert.IsFalse(todayRec.ClockOutTime.HasValue)
+            Assert.AreEqual("Present", todayRec.Status)
+        End Function
+
+        <TestMethod>
+        Public Async Function TestCaseC_EmployeeWithNoAttendanceRecordNotPunchedAsync() As Task
+            Dim repo As New MockAttendanceRepository()
+            Dim userRepo As New MockUserRepository()
+            Dim appLogger As New MockAppLogger()
+            Dim sqlHelper As New MockSqlHelper()
+            Dim auditLogger As New AuditLogger(sqlHelper)
+            Dim service As IAttendanceService = New AttendanceService(repo, userRepo, appLogger, auditLogger)
+
+            Dim userId As Integer = 999
+            Dim todayRec = Await service.GetTodayAttendanceForUserAsync(userId)
+            Assert.IsNull(todayRec)
+
+            Dim history = Await service.GetUserAttendanceHistoryAsync(userId)
+            Assert.IsNotNull(history)
+            Assert.AreEqual(0, history.Count)
+        End Function
+
+        <TestMethod>
+        Public Async Function TestCaseD_NullAndOptionalAttendanceFieldsSafetyAsync() As Task
+            Dim repo As New MockAttendanceRepository()
+            Dim userRepo As New MockUserRepository()
+            Dim appLogger As New MockAppLogger()
+            Dim sqlHelper As New MockSqlHelper()
+            Dim auditLogger As New AuditLogger(sqlHelper)
+            Dim service As IAttendanceService = New AttendanceService(repo, userRepo, appLogger, auditLogger)
+
+            Dim userId As Integer = 12
+            Dim entity As New AttendanceEntity() With {
+                .AttendanceId = 103,
+                .UserId = userId,
+                .AttendanceDate = DateTime.Today,
+                .ClockInTime = DateTime.Today.AddHours(9),
+                .ClockOutTime = Nothing,
+                .BreakStartTime = Nothing,
+                .TotalBreakMinutes = 0,
+                .TotalWorkingMinutes = 0,
+                .Status = Nothing,
+                .ClientIP = Nothing,
+                .CorrectionReason = Nothing
+            }
+            repo.Records.Add(entity)
+
+            Dim todayRec = Await service.GetTodayAttendanceForUserAsync(userId)
+            Assert.IsNotNull(todayRec)
+            Assert.AreEqual(String.Empty, todayRec.Status)
+            Assert.IsFalse(todayRec.ClockOutTime.HasValue)
+            Assert.IsFalse(todayRec.BreakStartTime.HasValue)
+            Assert.IsNull(entity.ClientIP)
+            Assert.IsNull(entity.CorrectionReason)
         End Function
     End Class
 End Namespace
