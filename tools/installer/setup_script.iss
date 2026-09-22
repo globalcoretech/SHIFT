@@ -58,7 +58,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Run]
 Filename: "icacls"; Parameters: """{commonappdata}\StaffAutomation\Backups"" /grant ""NT Service\MSSQL$SQLEXPRESS"":(OI)(CI)F /grant Administrators:(OI)(CI)F /T"; Flags: runhidden
 
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 // -------------------------------------------------------------------------------

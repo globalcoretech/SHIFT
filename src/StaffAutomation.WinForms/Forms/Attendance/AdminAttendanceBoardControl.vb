@@ -71,6 +71,7 @@ Namespace Forms.Attendance
         Private txtSearch As KryptonTextBox
         Private btnRefresh As KryptonButton
         Private btnExportCsv As KryptonButton
+        Private btnResetSelected As KryptonButton
 
         ' Live Staff Board Krypton Grid Container
         Private pnlGridBox As KryptonPanel
@@ -261,6 +262,7 @@ Namespace Forms.Attendance
             pnlToolbar = New KryptonPanel() With {
                 .Dock = DockStyle.Top,
                 .Height = 56,
+                .Width = 1100,
                 .Padding = New Padding(12, 8, 12, 8),
                 .Margin = New Padding(0, 8, 0, 16)
             }
@@ -272,32 +274,32 @@ Namespace Forms.Attendance
                 .Format = DateTimePickerFormat.Short,
                 .Value = DateTime.Today,
                 .Location = New Point(52, 8),
-                .Width = 125,
+                .Width = 115,
                 .Height = 40
             }
 
-            lblDeptLabel = New Label() With {.Text = "Dept:", .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold), .ForeColor = ThemeConstants.TextSecondary, .Location = New Point(190, 17), .AutoSize = True}
+            lblDeptLabel = New Label() With {.Text = "Dept:", .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold), .ForeColor = ThemeConstants.TextSecondary, .Location = New Point(180, 17), .AutoSize = True}
             cboDepartment = New KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(232, 8),
-                .Width = 145,
+                .Location = New Point(220, 8),
+                .Width = 135,
                 .Height = 40
             }
             PopulateDepartmentCombo()
 
-            lblStatusLabel = New Label() With {.Text = "Status:", .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold), .ForeColor = ThemeConstants.TextSecondary, .Location = New Point(390, 17), .AutoSize = True}
+            lblStatusLabel = New Label() With {.Text = "Status:", .Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold), .ForeColor = ThemeConstants.TextSecondary, .Location = New Point(370, 17), .AutoSize = True}
             cboStatusFilter = New KryptonComboBox() With {
                 .DropDownStyle = ComboBoxStyle.DropDownList,
-                .Location = New Point(442, 8),
-                .Width = 140,
+                .Location = New Point(415, 8),
+                .Width = 120,
                 .Height = 40
             }
             cboStatusFilter.Items.AddRange(New Object() {"All Statuses", "Present", "Working", "On Lunch Break", "Day Completed", "Not Punched In", "Late"})
             cboStatusFilter.SelectedIndex = 0
 
             txtSearch = New KryptonTextBox() With {
-                .Location = New Point(595, 8),
-                .Width = 175,
+                .Location = New Point(545, 8),
+                .Width = 150,
                 .Height = 40
             }
             txtSearch.CueHint.CueHintText = "🔍 Search staff..."
@@ -305,17 +307,32 @@ Namespace Forms.Attendance
 
             btnRefresh = New KryptonButton() With {
                 .Text = "Refresh",
-                .Location = New Point(782, 8),
-                .Size = New Size(115, 40)
+                .Size = New Size(95, 40),
+                .Location = New Point(743, 8),
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
             }
             btnRefresh.Values.Image = IconChar.SyncAlt.ToBitmap(Color.White, 16)
 
             btnExportCsv = New KryptonButton() With {
                 .Text = "Export CSV",
-                .Location = New Point(907, 8),
-                .Size = New Size(125, 40)
+                .Size = New Size(105, 40),
+                .Location = New Point(848, 8),
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
             }
             btnExportCsv.Values.Image = IconChar.FileCsv.ToBitmap(Color.FromArgb(30, 41, 59), 16)
+
+            btnResetSelected = New KryptonButton() With {
+                .Text = "Reset Selected",
+                .Size = New Size(125, 40),
+                .Location = New Point(963, 8),
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Right
+            }
+            btnResetSelected.Values.Image = IconChar.UndoAlt.ToBitmap(Color.FromArgb(220, 38, 38), 16)
+            btnResetSelected.StateCommon.Back.Color1 = Color.White
+            btnResetSelected.StateCommon.Back.Color2 = Color.White
+            btnResetSelected.StateCommon.Border.Color1 = Color.FromArgb(220, 38, 38)
+            btnResetSelected.StateCommon.Content.ShortText.Color1 = Color.FromArgb(220, 38, 38)
+            btnResetSelected.StateCommon.Content.ShortText.Font = New Font(ThemeConstants.FontNameDefault, 9.0!, FontStyle.Bold)
 
             AddHandler dtpAttendanceDate.ValueChanged, AddressOf dtpAttendanceDate_ValueChanged
             AddHandler cboDepartment.SelectedIndexChanged, Sub(s, e) ApplyBoardFilters()
@@ -323,6 +340,7 @@ Namespace Forms.Attendance
             AddHandler cboStatusFilter.SelectedIndexChanged, Sub(s, e) ApplyBoardFilters()
             AddHandler btnRefresh.Click, Async Sub(s, e) Await ResetAndReloadBoardAsync()
             AddHandler btnExportCsv.Click, AddressOf btnExportCsv_Click
+            AddHandler btnResetSelected.Click, AddressOf btnResetSelected_Click
 
             ThemeConstants.ApplyKryptonInputStyle(dtpAttendanceDate)
             ThemeConstants.ApplyKryptonInputStyle(cboDepartment)
@@ -332,6 +350,7 @@ Namespace Forms.Attendance
             ThemeConstants.ApplyKryptonPrimaryButton(btnRefresh)
             ThemeConstants.ApplyKryptonSecondaryButton(btnExportCsv)
 
+            pnlToolbar.Controls.Add(btnResetSelected)
             pnlToolbar.Controls.Add(btnExportCsv)
             pnlToolbar.Controls.Add(btnRefresh)
             pnlToolbar.Controls.Add(txtSearch)
@@ -619,16 +638,7 @@ Namespace Forms.Attendance
                     dgvStaffBoard.Columns.Add(btnCorrectCol)
                 End If
 
-                If Not dgvStaffBoard.Columns.Contains("btnResetToday") Then
-                    Dim btnResetCol As New DataGridViewButtonColumn() With {
-                        .Name = "btnResetToday",
-                        .HeaderText = "TEST: Reset",
-                        .Text = "TEST: Reset",
-                        .UseColumnTextForButtonValue = True,
-                        .Width = 95
-                    }
-                    dgvStaffBoard.Columns.Add(btnResetCol)
-                End If
+                ' Developer reset button is now at the top toolbar
 
                 ' Hide ID columns from view
                 If dgvStaffBoard.Columns.Contains("UserId") Then dgvStaffBoard.Columns("UserId").Visible = False
@@ -703,12 +713,7 @@ Namespace Forms.Attendance
                     col.Width = 76
                     col.Resizable = DataGridViewTriState.False
                 End If
-                If dgvStaffBoard.Columns.Contains("btnResetToday") Then
-                    Dim col = dgvStaffBoard.Columns("btnResetToday")
-                    col.AutoSizeMode = DataGridViewAutoSizeColumnMode.None
-                    col.Width = 85
-                    col.Resizable = DataGridViewTriState.False
-                End If
+                ' Reset button removed from columns
 
                 If list.Count = 0 Then
                     If baseList.Where(Function(x) x.AttendanceId.HasValue).Count() = 0 Then
@@ -907,30 +912,7 @@ Namespace Forms.Attendance
 
                     e.Handled = True
 
-                ElseIf colName = "btnResetToday" Then
-                    e.Paint(e.CellBounds, DataGridViewPaintParts.Background Or DataGridViewPaintParts.Border)
-
-                    ' Testing Action (Outline Red Button)
-                    Dim btnRect As New Rectangle(e.CellBounds.X + 4, e.CellBounds.Y + 6, e.CellBounds.Width - 8, e.CellBounds.Height - 12)
-                    If btnRect.Width > 20 AndAlso btnRect.Height > 10 Then
-                        Using bgBrush As New SolidBrush(Color.White),
-                              borderPen As New Pen(Color.FromArgb(220, 38, 38)),
-                              textBrush As New SolidBrush(Color.FromArgb(220, 38, 38)),
-                              sf As New StringFormat() With {.Alignment = StringAlignment.Center, .LineAlignment = StringAlignment.Center}
-
-                            Using path = GetRoundedRectPath(btnRect, 6)
-                                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias
-                                e.Graphics.FillPath(bgBrush, path)
-                                e.Graphics.DrawPath(borderPen, path)
-                            End Using
-
-                            Using btnFont As New Font(ThemeConstants.FontNameDefault, 8.25!, FontStyle.Bold)
-                                e.Graphics.DrawString("TEST: Reset", btnFont, textBrush, btnRect, sf)
-                            End Using
-                        End Using
-                    End If
-
-                    e.Handled = True
+                ' Reset button custom drawing removed
                 End If
             Catch ex As Exception
                 e.Handled = False
@@ -1002,24 +984,7 @@ Namespace Forms.Attendance
                             Await LoadBoardDataAsync()
                         End If
                     End Using
-                ElseIf colName = "btnResetToday" Then
-                    Dim confirmationMsg = $"This will permanently remove TODAY'S attendance record for this staff member." & vbCrLf & "This action is for testing only." & vbCrLf & vbCrLf & $"Reset today's attendance for {staffName}?"
-                    Dim parentForm = TryCast(Me.FindForm(), Form)
-                    Dim dr = Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Testing Utility: Confirm Reset", confirmationMsg, Forms.Common.AlertType.WarningAlert, actionText:="RESET TODAY", showCancel:=True, cancelText:="CANCEL")
-                    If dr = DialogResult.OK Then
-                        Try
-                            Me.Cursor = Cursors.WaitCursor
-                            Dim success = Await _attendanceService.ResetTodayAttendanceAsync(userId)
-                            If success Then
-                                Forms.Common.DataStateTracker.MarkAttendanceChanged()
-                                Await LoadBoardDataAsync()
-                            End If
-                        Catch ex As Exception
-                            Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Error", "Reset failed: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
-                        Finally
-                            Me.Cursor = Cursors.Default
-                        End Try
-                    End If
+                ' Reset logic moved to top toolbar button
                 End If
             Catch ex As Exception
                 _appLogger.LogError($"Error in board cell click: {ex.Message}", "AdminAttendanceBoardControl", ex)
@@ -1060,6 +1025,38 @@ Namespace Forms.Attendance
                 Dim parentForm = TryCast(Me.FindForm(), Form)
                 Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Export Error", "Export failed: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
             End Try
+        End Sub
+
+        Private Async Sub btnResetSelected_Click(sender As Object, e As EventArgs)
+            If dgvStaffBoard.SelectedRows.Count = 0 Then
+                Forms.Common.FrmInAppAlert.ShowModal(TryCast(Me.FindForm(), Form), "Selection Required", "Please select a staff member from the grid to reset their attendance.", Forms.Common.AlertType.InfoAlert, actionText:="OK")
+                Return
+            End If
+            
+            Dim row = dgvStaffBoard.SelectedRows(0)
+            If row.Cells("UserId") Is Nothing OrElse row.Cells("UserId").Value Is DBNull.Value Then Return
+            
+            Dim userId = Convert.ToInt32(row.Cells("UserId").Value)
+            Dim staffNameVal = If(row.Cells("Staff Name") IsNot Nothing, row.Cells("Staff Name").Value, Nothing)
+            Dim staffName = If(staffNameVal IsNot Nothing AndAlso staffNameVal IsNot DBNull.Value, staffNameVal.ToString(), $"Staff #{userId}")
+            
+            Dim confirmationMsg = $"This will permanently remove TODAY'S attendance record for this staff member." & vbCrLf & "This action is for testing only." & vbCrLf & vbCrLf & $"Reset today's attendance for {staffName}?"
+            Dim parentForm = TryCast(Me.FindForm(), Form)
+            Dim dr = Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Testing Utility: Confirm Reset", confirmationMsg, Forms.Common.AlertType.WarningAlert, actionText:="RESET TODAY", showCancel:=True, cancelText:="CANCEL")
+            If dr = DialogResult.OK Then
+                Try
+                    Me.Cursor = Cursors.WaitCursor
+                    Dim success = Await _attendanceService.ResetTodayAttendanceAsync(userId)
+                    If success Then
+                        Forms.Common.DataStateTracker.MarkAttendanceChanged()
+                        Await LoadBoardDataAsync()
+                    End If
+                Catch ex As Exception
+                    Forms.Common.FrmInAppAlert.ShowModal(parentForm, "Error", "Reset failed: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                Finally
+                    Me.Cursor = Cursors.Default
+                End Try
+            End If
         End Sub
 
         Private Shared Function FormatHoursShort(totalMins As Integer) As String

@@ -14,6 +14,7 @@ Namespace DTOs
         Public Property Title As String = String.Empty
         Public Property Description As String = String.Empty
         Public Property TaskType As String = String.Empty
+        Public Property CategoryId As Integer
         Public Property ClientId As Integer
         Public Property AssignedToUserId As Integer
         Public Property Priority As TaskPriority

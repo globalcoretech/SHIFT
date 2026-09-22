@@ -12,6 +12,7 @@ Namespace DTOs
         Public Property TaskType As String = String.Empty
         Public Property CategoryId As Integer
         Public Property CategoryCode As String = String.Empty
+        Public Property CategoryName As String = String.Empty
         Public Property FinancialYearId As Integer
         Public Property ClientId As Integer
         Public Property ClientName As String = String.Empty

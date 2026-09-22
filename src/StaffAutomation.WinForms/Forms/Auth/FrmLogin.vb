@@ -198,8 +198,15 @@ Namespace Forms.Auth
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
-                System.IO.File.WriteAllText("E:\Staff automation\crash.log", ex.ToString())
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Login Failure", "A crash occurred during login. Full details written to E:\Staff automation\crash.log", Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                Try
+                    Dim logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs")
+                    If Not System.IO.Directory.Exists(logDir) Then System.IO.Directory.CreateDirectory(logDir)
+                    Dim crashLogPath = System.IO.Path.Combine(logDir, $"login-crash-{DateTime.UtcNow:yyyy-MM-dd}.log")
+                    System.IO.File.AppendAllText(crashLogPath, ex.ToString() & Environment.NewLine)
+                Catch
+                    ' Ignore logging errors so we don't swallow the original exception
+                End Try
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Login Failure", "A system error occurred during login." & Environment.NewLine & Environment.NewLine & "Error: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
                 txtPassword.Clear()
             End Try
         End Sub

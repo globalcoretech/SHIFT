@@ -481,12 +481,13 @@ Namespace Forms.Main
         End Sub
 
         Private Async Sub OnNavItemClick(item As NavItemControlInfo)
-            ' Server-side action-boundary authorization enforcement
-            If item.Key.Equals("Admin", StringComparison.OrdinalIgnoreCase) Then
-                If Not _authzService.IsAuthorized(UserRole.Admin) Then
-                    Forms.Common.FrmInAppAlert.ShowModal(Me, "Access Denied", "Access Denied: Administration requires System Administrator privileges.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
-                    Return
-                End If
+            Try
+                ' Server-side action-boundary authorization enforcement
+                If item.Key.Equals("Admin", StringComparison.OrdinalIgnoreCase) Then
+                    If Not _authzService.IsAuthorized(UserRole.Admin) Then
+                        Forms.Common.FrmInAppAlert.ShowModal(Me, "Access Denied", "Access Denied: Administration requires System Administrator privileges.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
+                        Return
+                    End If
             ElseIf item.Key.Equals("Reports", StringComparison.OrdinalIgnoreCase) OrElse item.Key.Equals("Clients", StringComparison.OrdinalIgnoreCase) Then
                 If Not _authzService.IsAuthorizedAny(UserRole.Admin, UserRole.Owner) Then
                     Forms.Common.FrmInAppAlert.ShowModal(Me, "Access Denied", $"Access Denied: Access to {item.Caption} requires Owner or Admin privileges.", Forms.Common.AlertType.WarningAlert, actionText:="OK")
@@ -583,6 +584,10 @@ Namespace Forms.Main
                 Case Else
                     LoadWelcomeScreen()
             End Select
+            Catch ex As Exception
+                _appLogger.LogError($"Error navigating to {item.Key}.", "FrmMainShell", ex)
+                Forms.Common.FrmInAppAlert.ShowModal(Me, "Navigation Error", "Failed to load module: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+            End Try
         End Sub
 
         ''' <summary>

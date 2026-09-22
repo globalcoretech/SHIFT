@@ -29,7 +29,7 @@ Name: "{autoprograms}\SHIFT Workforce"; Filename: "{app}\StaffAutomation.WinForm
 Name: "{autodesktop}\SHIFT Workforce"; Filename: "{app}\StaffAutomation.WinForms.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\StaffAutomation.WinForms.exe"; Description: "{cm:LaunchProgram,SHIFT Workforce}"; Flags: nowait postinstall skipifsilent
+; Filename: "{app}\StaffAutomation.WinForms.exe"; Description: "{cm:LaunchProgram,SHIFT Workforce}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function IsDotNet8DesktopInstalled(): Boolean;

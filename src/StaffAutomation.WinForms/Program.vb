@@ -48,6 +48,28 @@ Namespace StaffAutomation.WinForms
             AddHandler System.Windows.Forms.Application.ThreadException, AddressOf OnThreadException
             AddHandler AppDomain.CurrentDomain.UnhandledException, AddressOf OnUnhandledException
 
+            ' First-run / Configuration Setup
+            Dim isConfigured As Boolean = False
+            While Not isConfigured
+                Try
+                    Dim config As Core.Configuration.IAppConfiguration = New DAL.Configuration.AppConfiguration()
+                    config.ValidateConfiguration()
+                    isConfigured = True
+                Catch ex As Core.Exceptions.ConfigurationException
+                    If ex.SettingKey = "ERR_CFG_MALFORMED" Then
+                        Throw ' Let global handler catch malformed config
+                    End If
+                    
+                    ' Missing config - First run setup
+                    Using setupForm = New Forms.Admin.FrmDatabaseConnectionConfig()
+                        If setupForm.ShowDialog() <> DialogResult.OK Then
+                            ' User cancelled setup
+                            Return
+                        End If
+                    End Using
+                End Try
+            End While
+
             ' Launch application starting at Login Screen
             Dim navigator As IViewNavigator = New ViewNavigator()
             Dim loginForm = Factory.CreateLoginForm(navigator)

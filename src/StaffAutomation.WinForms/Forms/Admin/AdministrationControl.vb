@@ -9,6 +9,13 @@ Imports StaffAutomation.Core.Security
 Imports StaffAutomation.BLL.Security
 Imports StaffAutomation.WinForms.Forms.Common
 Imports StaffAutomation.WinForms.Forms.Main
+Imports StaffAutomation.Core.Configuration
+Imports StaffAutomation.Core.Interfaces
+Imports StaffAutomation.DAL.Core
+Imports StaffAutomation.DAL.Repositories
+Imports StaffAutomation.BLL.Services
+Imports StaffAutomation.BLL.Logging
+Imports StaffAutomation.DAL.Configuration
 
 Namespace Forms.Admin
     ''' <summary>
@@ -93,6 +100,28 @@ Namespace Forms.Admin
                                                        End Using
                                                    End Sub
 
+            Dim cardCategories = CreateActionCard("📋  Task Categories", "Manage dynamic task categories for client assignments. Add, edit, or disable types.", "Dynamic Tasks", Color.FromArgb(234, 88, 12), "Manage Categories →")
+            AddHandler cardCategories.ActionClicked, Sub(s, e)
+                                                         Dim authz As IAuthorizationService = New AuthorizationService()
+                                                         If Not authz.IsAuthorized(UserRole.Admin) Then
+                                                             FrmInAppAlert.ShowModal(Me.FindForm(), "Access Denied", "Access Denied: Category management requires System Administrator privileges.", AlertType.WarningAlert, actionText:="OK")
+                                                             Return
+                                                         End If
+                                                         ' Placeholder for DB resolving logic in real app, assuming DI resolves service here
+                                                         ' For WinForms directly instantiating: 
+                                                         ' Note: Assuming Service is resolved correctly in FrmMainShell or instantiated manually
+                                                         ' For simplicity here we just show it if possible or user can click
+                                                         Dim config As IAppConfiguration = New AppConfiguration()
+                                                         Dim connFactory As IDatabaseConnectionFactory = New DbConnectionFactory(config)
+                                                         Dim sqlHelper = New SqlHelper(connFactory)
+                                                         Dim repo = New TaskCategoryRepository(sqlHelper)
+                                                         Dim audit = New AuditLogger(sqlHelper)
+                                                         Dim svc = New TaskCategoryService(repo, audit)
+                                                         Using dlg As New FrmTaskCategoryManagement(svc, 1) ' passing 1 for Admin ID temporarily
+                                                             dlg.ShowDialog(Me.FindForm())
+                                                         End Using
+                                                     End Sub
+
             Dim cardDbConn = CreateActionCard("🌐  Central Database Setup", "Configure central SQL Server hostname, IP address, instance, authentication credentials, and test connection.", "Multi-System Config", Color.FromArgb(37, 99, 235), "Configure →")
             AddHandler cardDbConn.ActionClicked, Sub(s, e)
                                                      Dim authz As IAuthorizationService = New AuthorizationService()
@@ -125,6 +154,7 @@ Namespace Forms.Admin
             flowContainer.Controls.Add(cardReports)
             flowContainer.Controls.Add(cardDevices)
             flowContainer.Controls.Add(cardSecurity)
+            flowContainer.Controls.Add(cardCategories)
 
             ' Dynamic card width recalculation on container resize for 1366x768 support
             AddHandler flowContainer.Resize, Sub(s, e) RecalculateCardWidths()

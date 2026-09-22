@@ -45,6 +45,7 @@ Namespace Forms.Tasks
         Private _activeNavigationToken As Long = 0
         Private ReadOnly _appLogger As IAppLogger
         Private ReadOnly _auditLogger As AuditLogger
+        Private ReadOnly _taskCategoryService As ITaskCategoryService
         Private ReadOnly _mainShellHost As Forms.Main.FrmMainShell
 
         ' In-Memory Data State
@@ -252,11 +253,13 @@ Namespace Forms.Tasks
             _activityRepo = New TaskActivityRepository(sqlHelper)
             _userRepo = New UserRepository(sqlHelper)
             Dim attendanceRepo As DAL.Interfaces.IAttendanceRepository = New AttendanceRepository(sqlHelper)
+            Dim taskCategoryRepo As DAL.Interfaces.ITaskCategoryRepository = New TaskCategoryRepository(sqlHelper)
             Dim workflowEngine As ITaskWorkflowEngine = New TaskWorkflowEngine()
 
             _clientService = New ClientService(clientRepo, _appLogger, _auditLogger)
             _discussionService = New DiscussionService(discussionRepo, taskRepo, _appLogger, _auditLogger)
             _attendanceService = New AttendanceService(attendanceRepo, _userRepo, _appLogger, _auditLogger, Nothing)
+            _taskCategoryService = New TaskCategoryService(taskCategoryRepo, _auditLogger)
             _taskService = New TaskManagementService(taskRepo, workflowEngine, _appLogger, _auditLogger, clientRepo, _userRepo, _activityRepo, connFactory)
             Me.DoubleBuffered = True
             Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
@@ -2380,7 +2383,7 @@ Namespace Forms.Tasks
             SetActionButtonsEnabled(False)
 
             Try
-                Using dlg As New FrmCreateTask(_taskService, _clientService, _userRepo, _appLogger)
+                Using dlg As New FrmCreateTask(_taskService, _clientService, _userRepo, _taskCategoryService, _appLogger)
                     If dlg.ShowDialog(Me.FindForm()) = DialogResult.OK Then
                         Dim newId As Integer = dlg.CreatedTaskId
 
@@ -2453,7 +2456,7 @@ Namespace Forms.Tasks
                     Return
                 End If
 
-                Using dlg As New FrmEditTask(_selectedTask.TaskId, _taskService, _clientService, _userRepo, _appLogger)
+                Using dlg As New FrmEditTask(_selectedTask.TaskId, _taskService, _clientService, _userRepo, _taskCategoryService, _appLogger)
                     If dlg.ShowDialog(Me.FindForm()) = DialogResult.OK Then
                         Dim updatedId As Integer = dlg.EditedTaskId
 

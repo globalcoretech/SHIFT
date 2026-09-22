@@ -116,6 +116,15 @@ Namespace Forms.Tasks
             End Function
         End Class
 
+        Private Class TaskCategoryComboItem
+            Public Property CategoryId As Integer
+            Public Property CategoryName As String = String.Empty
+
+            Public Overrides Function ToString() As String
+                Return CategoryName
+            End Function
+        End Class
+
         Private Class UserComboItem
             Public Property UserId As Integer
             Public Property FullName As String = String.Empty
@@ -125,13 +134,16 @@ Namespace Forms.Tasks
             End Function
         End Class
 
-        Public Sub New(taskService As ITaskManagementService, clientService As IClientService, userRepo As DAL.Interfaces.IUserRepository, appLogger As IAppLogger)
+        Private ReadOnly _taskCategoryService As ITaskCategoryService
+
+        Public Sub New(taskService As ITaskManagementService, clientService As IClientService, userRepo As DAL.Interfaces.IUserRepository, taskCategoryService As ITaskCategoryService, appLogger As IAppLogger)
             If clientService Is Nothing Then Throw New ArgumentNullException(NameOf(clientService), "IClientService dependency cannot be Nothing in FrmCreateTask.")
             If taskService Is Nothing Then Throw New ArgumentNullException(NameOf(taskService), "ITaskManagementService dependency cannot be Nothing in FrmCreateTask.")
 
             _taskService = taskService
             _clientService = clientService
             _userRepo = userRepo
+            _taskCategoryService = taskCategoryService
             _appLogger = appLogger
 
             InitializeComponent()
@@ -284,8 +296,7 @@ Namespace Forms.Tasks
                 .Location = New Point(20, yPos),
                 .Size = New Size(615, 25)
             }
-            ' Populate task types from authoritative provider
-            cboTaskType.Items.AddRange(TaskWorkflowTemplateProvider.GetAllTaskTypes().Cast(Of Object)().ToArray())
+            ' We will populate this dynamically in InitializeDataAsync
             AddHandler cboTaskType.SelectedIndexChanged, AddressOf OnTaskTypeSelectionChanged
             yPos += 38
 
@@ -557,7 +568,26 @@ Namespace Forms.Tasks
                     cboAssignee.SelectedIndex = 1
                 End If
 
-                ' 4. Reset Fields and Smart Trackers
+                ' 4. Load Active Categories
+                cboTaskType.Items.Clear()
+                If _taskCategoryService IsNot Nothing Then
+                    Try
+                        Dim categories = Await _taskCategoryService.GetAllCategoriesAsync()
+                        If categories IsNot Nothing Then
+                            For Each cat In categories.Where(Function(c) c.IsActive)
+                                cboTaskType.Items.Add(New TaskCategoryComboItem With {
+                                    .CategoryId = cat.CategoryId,
+                                    .CategoryName = cat.CategoryName
+                                })
+                            Next
+                        End If
+                        If cboTaskType.Items.Count > 0 Then cboTaskType.SelectedIndex = 0
+                    Catch exCat As Exception
+                        _appLogger.LogError($"[CreateTaskCategoryLoad] UI dropdown binding failed: {exCat.Message}", "FrmCreateTask", exCat)
+                    End Try
+                End If
+
+                ' 5. Reset Fields and Smart Trackers
                 _isTitleManuallyEdited = False
                 _isPriorityManuallyOverridden = False
                 _isDescriptionManuallyEdited = False
@@ -565,7 +595,6 @@ Namespace Forms.Tasks
                 txtGstinRef.Text = String.Empty
                 txtTaskTitle.Text = String.Empty
                 txtDescription.Text = String.Empty
-                If cboTaskType.Items.Count > 0 Then cboTaskType.SelectedIndex = 0
 
                 If cboTaskType.SelectedIndex >= 0 Then
                     OnTaskTypeSelectionChanged(cboTaskType, EventArgs.Empty)
@@ -606,7 +635,9 @@ Namespace Forms.Tasks
 
             If cboTaskType.SelectedIndex < 0 Then Return
 
-            Dim selectedType = cboTaskType.SelectedItem.ToString()
+            Dim selectedItem = TryCast(cboTaskType.SelectedItem, TaskCategoryComboItem)
+            If selectedItem Is Nothing Then Return
+            Dim selectedType = selectedItem.CategoryName
             Dim tmpl = TaskWorkflowTemplateProvider.GetTemplate(selectedType)
 
             _isUpdatingDefaults = True
@@ -649,7 +680,8 @@ Namespace Forms.Tasks
 
             _isUpdatingDefaults = True
             Try
-                Dim selectedType = If(cboTaskType.SelectedIndex >= 0, cboTaskType.SelectedItem.ToString(), "Task")
+                Dim selectedItem = TryCast(cboTaskType.SelectedItem, TaskCategoryComboItem)
+                Dim selectedType = If(selectedItem IsNot Nothing, selectedItem.CategoryName, "Task")
 
                 ' 1. Auto-generate Task Title period if title is not manually edited by user
                 If Not _isTitleManuallyEdited Then
@@ -794,7 +826,9 @@ Namespace Forms.Tasks
 
             Try
                 ' Resolve Template & Department
-                Dim selectedType = cboTaskType.SelectedItem.ToString()
+                Dim categoryItem = TryCast(cboTaskType.SelectedItem, TaskCategoryComboItem)
+                Dim selectedType = If(categoryItem IsNot Nothing, categoryItem.CategoryName, "")
+                Dim categoryId = If(categoryItem IsNot Nothing, categoryItem.CategoryId, 0)
                 Dim tmpl = TaskWorkflowTemplateProvider.GetTemplate(selectedType)
 
                 ' Map Priority
@@ -810,6 +844,7 @@ Namespace Forms.Tasks
                     .Title = txtTaskTitle.Text.Trim(),
                     .Description = If(Not String.IsNullOrWhiteSpace(txtDescription.Text), txtDescription.Text.Trim(), txtTaskTitle.Text.Trim()),
                     .TaskType = selectedType,
+                    .CategoryId = categoryId,
                     .ClientId = clientItem.ClientId,
                     .ClientName = clientItem.ClientName,
                     .AssignedToUserId = staffItem.UserId,

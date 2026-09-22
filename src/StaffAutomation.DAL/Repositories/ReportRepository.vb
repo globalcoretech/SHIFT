@@ -39,6 +39,19 @@ Namespace Repositories
                     End Using
                 End Using
 
+                ' Pre-populate all days in range for each user to track 'Absent'
+                Dim currDate = startDate.Date
+                While currDate <= endDate.Date
+                    For Each kvp In summaries
+                        kvp.Value.Days.Add(New StaffDailyActivityDayDto With {
+                            .ActivityDate = currDate,
+                            .HasAttendance = False,
+                            .AttendanceStatus = "Absent"
+                        })
+                    Next
+                    currDate = currDate.AddDays(1)
+                End While
+
                 ' Query 2: Attendance
                 Dim sqlAtt = "SELECT UserId, AttendanceDate, ClockInTime, ClockOutTime, BreakStartTime, TotalBreakMinutes, TotalWorkingMinutes " &
                              "FROM dbo.tbl_Attendance WHERE AttendanceDate >= @StartDate AND AttendanceDate <= @EndDate " &
@@ -55,23 +68,28 @@ Namespace Repositories
 
                             Dim attDate = reader.GetDateTime(1)
                             Dim dayDto = summaries(uId).Days.FirstOrDefault(Function(d) d.ActivityDate = attDate)
-                            If dayDto Is Nothing Then
-                                dayDto = New StaffDailyActivityDayDto With {.ActivityDate = attDate}
-                                summaries(uId).Days.Add(dayDto)
-                            End If
+                            If dayDto IsNot Nothing Then
+                                dayDto.HasAttendance = True
+                                dayDto.ClockInTime = reader.GetDateTime(2)
+                                dayDto.ClockOutTime = If(reader.IsDBNull(3), CType(Nothing, Date?), reader.GetDateTime(3))
+                                dayDto.BreakStartTime = If(reader.IsDBNull(4), CType(Nothing, Date?), reader.GetDateTime(4))
+                                dayDto.TotalBreakMinutes = reader.GetInt32(5)
+                                dayDto.TotalWorkingMinutes = reader.GetInt32(6)
 
-                            dayDto.HasAttendance = True
-                            dayDto.ClockInTime = reader.GetDateTime(2)
-                            dayDto.ClockOutTime = If(reader.IsDBNull(3), CType(Nothing, Date?), reader.GetDateTime(3))
-                            dayDto.BreakStartTime = If(reader.IsDBNull(4), CType(Nothing, Date?), reader.GetDateTime(4))
-                            dayDto.TotalBreakMinutes = reader.GetInt32(5)
-                            dayDto.TotalWorkingMinutes = reader.GetInt32(6)
+                                If Not dayDto.ClockOutTime.HasValue Then
+                                    dayDto.AttendanceStatus = "Missing Punch Out"
+                                ElseIf dayDto.ClockOutTime.Value.TimeOfDay < New TimeSpan(14, 0, 0) OrElse dayDto.TotalWorkingMinutes < 420 Then
+                                    dayDto.AttendanceStatus = "Half Day"
+                                Else
+                                    dayDto.AttendanceStatus = "Present"
+                                End If
+                            End If
                         End While
                     End Using
                 End Using
 
                 ' Query 3: Task Activities
-                Dim sqlTasks = "SELECT a.UserId, a.ActivityDate, a.TaskId, t.Title, c.ClientName, a.DurationMinutes, tc.CategoryName " &
+                Dim sqlTasks = "SELECT a.UserId, a.ActivityDate, a.TaskId, t.Title, c.ClientName, a.DurationMinutes, tc.CategoryName, t.StatusId " &
                                "FROM dbo.tbl_TaskActivities a " &
                                "JOIN dbo.tbl_Tasks t ON a.TaskId = t.TaskId " &
                                "JOIN dbo.tbl_Clients c ON t.ClientId = c.ClientId " &
@@ -90,18 +108,20 @@ Namespace Repositories
 
                             Dim actDate = reader.GetDateTime(1)
                             Dim dayDto = summaries(uId).Days.FirstOrDefault(Function(d) d.ActivityDate = actDate)
-                            If dayDto Is Nothing Then
-                                dayDto = New StaffDailyActivityDayDto With {.ActivityDate = actDate, .HasAttendance = False}
-                                summaries(uId).Days.Add(dayDto)
-                            End If
+                            If dayDto IsNot Nothing Then
+                                Dim statusId = reader.GetInt32(7)
+                                Dim statusName = [Enum].GetName(GetType(StaffAutomation.Core.Enums.TaskWorkflowState), statusId)
+                                If String.IsNullOrEmpty(statusName) Then statusName = "Unknown"
 
-                            dayDto.Tasks.Add(New StaffDailyActivityTaskDto With {
-                                .TaskId = reader.GetInt32(2),
-                                .TaskTitle = reader.GetString(3),
-                                .ClientName = reader.GetString(4),
-                                .DurationMinutes = reader.GetInt32(5),
-                                .TimeCategoryName = reader.GetString(6)
-                            })
+                                dayDto.Tasks.Add(New StaffDailyActivityTaskDto With {
+                                    .TaskId = reader.GetInt32(2),
+                                    .TaskTitle = reader.GetString(3),
+                                    .ClientName = reader.GetString(4),
+                                    .DurationMinutes = reader.GetInt32(5),
+                                    .TimeCategoryName = reader.GetString(6),
+                                    .TaskStatus = statusName
+                                })
+                            End If
                         End While
                     End Using
                 End Using
@@ -114,7 +134,7 @@ Namespace Repositories
                 summary.TotalWorkingHours = summary.Days.Sum(Function(d) d.TotalTaskDurationMinutes) / 60.0
             Next
 
-            Return summaries.Values.Where(Function(s) s.Days.Count > 0).OrderBy(Function(s) s.StaffName).ToList()
+            Return summaries.Values.OrderBy(Function(s) s.StaffName).ToList()
         End Function
     End Class
 End Namespace

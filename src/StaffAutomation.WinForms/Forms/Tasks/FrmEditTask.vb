@@ -136,11 +136,23 @@ Namespace Forms.Tasks
             End Function
         End Class
 
-        Public Sub New(taskId As Integer, taskService As ITaskManagementService, clientService As IClientService, userRepo As DAL.Interfaces.IUserRepository, appLogger As IAppLogger)
+        Private Class TaskCategoryComboItem
+            Public Property CategoryId As Integer
+            Public Property CategoryName As String = String.Empty
+
+            Public Overrides Function ToString() As String
+                Return CategoryName
+            End Function
+        End Class
+
+        Private ReadOnly _taskCategoryService As ITaskCategoryService
+
+        Public Sub New(taskId As Integer, taskService As ITaskManagementService, clientService As IClientService, userRepo As DAL.Interfaces.IUserRepository, taskCategoryService As ITaskCategoryService, appLogger As IAppLogger)
             _taskId = taskId
             _taskService = taskService
             _clientService = clientService
             _userRepo = userRepo
+            _taskCategoryService = taskCategoryService
             _appLogger = appLogger
 
             InitializeComponent()
@@ -327,7 +339,7 @@ Namespace Forms.Tasks
                 .Location = New Point(20, yPos),
                 .Size = New Size(615, 25)
             }
-            cboTaskType.Items.AddRange(TaskWorkflowTemplateProvider.GetAllTaskTypes().Cast(Of Object)().ToArray())
+            ' We will populate this dynamically in InitializeAndLoadDataAsync
             AddHandler cboTaskType.SelectedIndexChanged, AddressOf OnTaskTypeSelectionChanged
             yPos += 38
 
@@ -615,7 +627,22 @@ Namespace Forms.Tasks
                 lblValCreatedOn.Text = _loadedTask.AssignmentDate.ToString("dd MMM yyyy")
                 lblValCreatedBy.Text = If(Not String.IsNullOrEmpty(_loadedTask.AssignedByName), _loadedTask.AssignedByName, "System")
 
-                ' 6. Fill Editable Fields
+                ' 6. Populate Task Category Dropdown
+                cboTaskType.Items.Clear()
+                cboTaskType.Items.Add("-- Select Category --")
+                If _taskCategoryService IsNot Nothing Then
+                    Dim categories = Await _taskCategoryService.GetAllCategoriesAsync()
+                    If categories IsNot Nothing Then
+                        For Each cat In categories.Where(Function(c) c.IsActive)
+                            cboTaskType.Items.Add(New TaskCategoryComboItem With {
+                                .CategoryId = cat.CategoryId,
+                                .CategoryName = cat.CategoryName
+                            })
+                        Next
+                    End If
+                End If
+
+                ' 7. Fill Editable Fields
                 txtTaskTitle.Text = _loadedTask.Title
                 txtDescription.Text = _loadedTask.Description
 
@@ -629,7 +656,7 @@ Namespace Forms.Tasks
                 SelectPriorityInCombo(_loadedTask.Priority)
 
                 ' Select Task Type
-                SelectTaskTypeInCombo(_loadedTask.TaskType)
+                SelectTaskTypeInCombo(If(String.IsNullOrWhiteSpace(_loadedTask.CategoryName), _loadedTask.TaskType, _loadedTask.CategoryName))
 
                 _isDirty = False
             Catch ex As Exception
@@ -646,8 +673,9 @@ Namespace Forms.Tasks
                 Return
             End If
 
-            For i As Integer = 0 To cboTaskType.Items.Count - 1
-                If String.Equals(cboTaskType.Items(i).ToString(), taskTypeStr.Trim(), StringComparison.OrdinalIgnoreCase) Then
+            For i As Integer = 1 To cboTaskType.Items.Count - 1
+                Dim item = TryCast(cboTaskType.Items(i), TaskCategoryComboItem)
+                If item IsNot Nothing AndAlso String.Equals(item.CategoryName, taskTypeStr.Trim(), StringComparison.OrdinalIgnoreCase) Then
                     cboTaskType.SelectedIndex = i
                     Return
                 End If
@@ -684,7 +712,9 @@ Namespace Forms.Tasks
 
             If cboTaskType.SelectedIndex < 0 Then Return
 
-            Dim selectedType = cboTaskType.SelectedItem.ToString()
+            Dim selectedItem = TryCast(cboTaskType.SelectedItem, TaskCategoryComboItem)
+            If selectedItem Is Nothing Then Return
+            Dim selectedType = selectedItem.CategoryName
             Dim tmpl = TaskWorkflowTemplateProvider.GetTemplate(selectedType)
 
             ' Update Workflow Preview Box
@@ -759,7 +789,9 @@ Namespace Forms.Tasks
             Me.Cursor = Cursors.WaitCursor
 
             Try
-                Dim selectedType = cboTaskType.SelectedItem.ToString()
+                Dim categoryItem = TryCast(cboTaskType.SelectedItem, TaskCategoryComboItem)
+                Dim selectedType = If(categoryItem IsNot Nothing, categoryItem.CategoryName, "")
+                Dim categoryId = If(categoryItem IsNot Nothing, categoryItem.CategoryId, 0)
 
                 Dim selPriorityStr = cboPriority.SelectedItem.ToString()
                 Dim priorityVal As TaskPriority = TaskPriority.Medium
@@ -771,6 +803,7 @@ Namespace Forms.Tasks
                     .Title = txtTaskTitle.Text.Trim(),
                     .Description = If(Not String.IsNullOrWhiteSpace(txtDescription.Text), txtDescription.Text.Trim(), txtTaskTitle.Text.Trim()),
                     .TaskType = selectedType,
+                    .CategoryId = categoryId,
                     .ClientId = clientItem.ClientId,
                     .AssignedToUserId = staffItem.UserId,
                     .Priority = priorityVal,

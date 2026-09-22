@@ -42,35 +42,32 @@ Namespace Configuration
 
             ' Precedence 4: Clear Configuration Exception if no valid configuration exists
             Throw New StaffAutomation.Core.Exceptions.ConfigurationException(
-                $"Configuration Error: Database connection string '{name}' was not found. Checked: (1) Environment Variables, (2) Local Machine dbconnection.json, and (3) App.config. Please configure database settings via System Settings or Environment Variables.", name)
+                $"Configuration Error: Database connection string '{name}' was not found. Checked: (1) Environment Variables, (2) Local Machine dbconnection.json, and (3) App.config. Please configure database settings via System Settings or Environment Variables.", "ERR_CFG_MISSING")
         End Function
 
         ''' <summary>
         ''' Reads local per-machine dbconnection.json configuration from %APPDATA%\SHIFTWorkforce or application root.
         ''' </summary>
         Private Function GetLocalMachineJsonConnectionString() As String
-            Try
-                ' Check Primary Machine Path: %APPDATA%\SHIFTWorkforce\dbconnection.json
-                Dim machinePath = DatabaseConnectionSettings.GetDefaultMachineConfigPath()
-                If System.IO.File.Exists(machinePath) Then
-                    Dim settings = DatabaseConnectionSettings.LoadFromFile(machinePath)
-                    If settings IsNot Nothing Then
-                        Dim connStr = settings.BuildConnectionString()
-                        If Not String.IsNullOrWhiteSpace(connStr) Then Return connStr
-                    End If
+            ' Check Primary Machine Path: %APPDATA%\SHIFTWorkforce\dbconnection.json
+            Dim machinePath = DatabaseConnectionSettings.GetDefaultMachineConfigPath()
+            If System.IO.File.Exists(machinePath) Then
+                Dim settings = DatabaseConnectionSettings.LoadFromFile(machinePath)
+                If settings IsNot Nothing Then
+                    Dim connStr = settings.BuildConnectionString()
+                    If Not String.IsNullOrWhiteSpace(connStr) Then Return connStr
                 End If
+            End If
 
-                ' Check Secondary Fallback Path: dbconnection.json in app directory
-                Dim fallbackPath = DatabaseConnectionSettings.GetFallbackLocalConfigPath()
-                If System.IO.File.Exists(fallbackPath) Then
-                    Dim settings = DatabaseConnectionSettings.LoadFromFile(fallbackPath)
-                    If settings IsNot Nothing Then
-                        Dim connStr = settings.BuildConnectionString()
-                        If Not String.IsNullOrWhiteSpace(connStr) Then Return connStr
-                    End If
+            ' Check Secondary Fallback Path: dbconnection.json in app directory
+            Dim fallbackPath = DatabaseConnectionSettings.GetFallbackLocalConfigPath()
+            If System.IO.File.Exists(fallbackPath) Then
+                Dim settings = DatabaseConnectionSettings.LoadFromFile(fallbackPath)
+                If settings IsNot Nothing Then
+                    Dim connStr = settings.BuildConnectionString()
+                    If Not String.IsNullOrWhiteSpace(connStr) Then Return connStr
                 End If
-            Catch
-            End Try
+            End If
 
             Return Nothing
         End Function

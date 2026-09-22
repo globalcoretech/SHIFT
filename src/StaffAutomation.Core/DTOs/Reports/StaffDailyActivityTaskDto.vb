@@ -5,5 +5,6 @@ Namespace DTOs.Reports
         Public Property ClientName As String
         Public Property DurationMinutes As Integer
         Public Property TimeCategoryName As String
+        Public Property TaskStatus As String
     End Class
 End Namespace

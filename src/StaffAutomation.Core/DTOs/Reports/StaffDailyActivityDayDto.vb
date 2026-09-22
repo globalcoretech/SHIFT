@@ -10,6 +10,7 @@ Namespace DTOs.Reports
         Public Property BreakStartTime As Date?
         Public Property TotalBreakMinutes As Integer
         Public Property TotalWorkingMinutes As Integer ' From Attendance
+        Public Property AttendanceStatus As String ' Present, Absent, Half Day, Leave
         
         Public Property Tasks As New List(Of StaffDailyActivityTaskDto)()
         

@@ -99,8 +99,8 @@ Namespace Configuration
                 }
 
                 Return JsonSerializer.Deserialize(Of DatabaseConnectionSettings)(jsonString, options)
-            Catch
-                Return Nothing
+            Catch ex As Exception
+                Throw New StaffAutomation.Core.Exceptions.ConfigurationException("Database connection settings file is malformed or invalid.", "ERR_CFG_MALFORMED")
             End Try
         End Function
 

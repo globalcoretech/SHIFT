@@ -58,8 +58,17 @@ Namespace Forms.Admin
         Protected Overrides Sub OnLoad(e As EventArgs)
             MyBase.OnLoad(e)
 
-            ' Strict Authorization Security Gate: Restrict exclusively to Admin and Owner roles
-            If Not _authzService.IsAuthorizedAny(UserRole.Admin, UserRole.Owner) Then
+            ' Strict Authorization Security Gate: Restrict exclusively to Admin and Owner roles (Bypass for First-Run Setup)
+            Dim isFirstRun As Boolean = False
+            Try
+                Dim config As Core.Configuration.IAppConfiguration = New DAL.Configuration.AppConfiguration()
+                config.ValidateConfiguration()
+            Catch ex As Core.Exceptions.ConfigurationException
+                If ex.SettingKey = "ERR_CFG_MISSING" Then isFirstRun = True
+            Catch
+            End Try
+
+            If Not isFirstRun AndAlso Not _authzService.IsAuthorizedAny(UserRole.Admin, UserRole.Owner) Then
                 FrmInAppAlert.ShowModal(Me, "Access Denied", "Access Denied: Database server configuration is restricted to System Administrators and Firm Owners.", AlertType.WarningAlert, actionText:="OK")
                 Me.Close()
                 Return
@@ -312,14 +321,28 @@ Namespace Forms.Admin
             End Try
         End Sub
 
-        Private Sub btnSaveConfig_Click(sender As Object, e As EventArgs)
+        Private Async Sub btnSaveConfig_Click(sender As Object, e As EventArgs)
             If String.IsNullOrWhiteSpace(txtServer.Text) Then
                 AppNotificationHelper.ShowWarning("Please enter a valid SQL Server hostname or IP address.", "Host Required", Me)
                 Return
             End If
 
             Try
+                Me.Cursor = Cursors.WaitCursor
+                btnSaveConfig.Enabled = False
+                lblTestStatus.Text = "Status: Validating configuration before saving..."
+
                 Dim settings = BuildSettingsFromInput()
+                
+                ' Validate Connection
+                Dim testSettings = BuildSettingsFromInput()
+                testSettings.ConnectTimeout = 5
+                Dim connStr = testSettings.BuildConnectionString()
+                
+                Using conn As New SqlConnection(connStr)
+                    Await conn.OpenAsync()
+                End Using
+
                 Dim machinePath = DatabaseConnectionSettings.GetDefaultMachineConfigPath()
                 settings.SaveToFile(machinePath)
 
@@ -327,7 +350,15 @@ Namespace Forms.Admin
                 Me.DialogResult = DialogResult.OK
                 Me.Close()
             Catch ex As Exception
-                AppNotificationHelper.ShowError($"Failed to save database configuration: {ex.Message}", "Save Failure", Me)
+                Dim safeError = ex.Message
+                If safeError.Contains("Password=") OrElse safeError.Contains("PWD=") Then
+                    safeError = "SQL Authentication failed for specified user credentials."
+                End If
+                AppNotificationHelper.ShowError($"Connection testing failed. Configuration was not saved:{Environment.NewLine}{safeError}", "Validation Failure", Me)
+            Finally
+                btnSaveConfig.Enabled = True
+                Me.Cursor = Cursors.Default
+                lblTestStatus.Text = "Status: Ready to test or save database configuration."
             End Try
         End Sub
     End Class
