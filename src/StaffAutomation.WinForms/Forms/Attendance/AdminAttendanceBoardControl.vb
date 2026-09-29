@@ -611,7 +611,6 @@ Namespace Forms.Attendance
                 dt.Rows.Add(item.UserId, attIdObj, item.EmployeeCode, item.StaffName, item.DepartmentName, pIn, pOut, brkStr, hrsStr, item.LiveStateDisplay, corrStr)
             Next
 
-            dgvStaffBoard.SuspendLayout()
             Try
                 dgvStaffBoard.DataSource = dt
 
@@ -727,8 +726,8 @@ Namespace Forms.Attendance
                 Else
                     lblEmptyState.Visible = False
                 End If
-            Finally
-                dgvStaffBoard.ResumeLayout(True)
+            Catch ex As Exception
+                _appLogger.LogError($"Error in UI generation: {ex.Message}", "AdminAttendanceBoardControl", ex)
             End Try
         End Sub
 

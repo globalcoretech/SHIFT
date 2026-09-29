@@ -96,6 +96,10 @@ Namespace Forms.Tasks
         Private lblDescriptionTag As Label
         Private txtDescription As TextBox
 
+        ' Checklist Section
+        Private lblChecklistHeader As Label
+        Private dgvChecklist As DataGridView
+
         ' Sticky Footer Bar
         Private pnlFooter As Panel
         Private btnCancel As ModernButton
@@ -158,8 +162,8 @@ Namespace Forms.Tasks
             Me.SuspendLayout()
 
             ' Form Dimensions & Centered Modal Configuration
-            Me.Size = New Size(680, 700)
-            Me.MinimumSize = New Size(620, 480)
+            Me.Size = New Size(680, 800)
+            Me.MinimumSize = New Size(620, 600)
             Me.StartPosition = FormStartPosition.CenterParent
             Me.FormBorderStyle = FormBorderStyle.FixedDialog
             Me.MaximizeBox = False
@@ -428,6 +432,38 @@ Namespace Forms.Tasks
             pnlFormScroll.Controls.Add(cboPriority)
             pnlFormScroll.Controls.Add(lblPriorityTag)
             pnlFormScroll.Controls.Add(lblConfigHeader)
+
+            ' SECTION E: CHECKLIST CONFIGURATION
+            lblChecklistHeader = CreateSectionHeader("TASK CHECKLIST (OPTIONAL)", yPos)
+            yPos += 24
+
+            dgvChecklist = New DataGridView() With {
+                .Location = New Point(20, yPos),
+                .Size = New Size(615, 120),
+                .AllowUserToAddRows = True,
+                .AllowUserToDeleteRows = True,
+                .AutoGenerateColumns = False,
+                .BackgroundColor = Color.White,
+                .BorderStyle = BorderStyle.FixedSingle,
+                .RowHeadersVisible = False,
+                .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            }
+            
+            Dim colDesc As New DataGridViewTextBoxColumn() With {
+                .Name = "colDesc",
+                .HeaderText = "Checklist Item Description",
+                .FillWeight = 80
+            }
+            Dim colProof As New DataGridViewCheckBoxColumn() With {
+                .Name = "colProof",
+                .HeaderText = "Requires Proof",
+                .FillWeight = 20
+            }
+            dgvChecklist.Columns.Add(colDesc)
+            dgvChecklist.Columns.Add(colProof)
+            
+            pnlFormScroll.Controls.Add(dgvChecklist)
+            yPos += 140
 
             pnlFormScroll.Controls.Add(lblTaskTypeTag)
             pnlFormScroll.Controls.Add(cboTaskType)
@@ -861,6 +897,31 @@ Namespace Forms.Tasks
                 Dim newTaskId As Integer = Await _taskService.CreateAndAssignTaskAsync(taskDto)
 
                 If newTaskId > 0 Then
+                    ' 4. Save Checklist Items
+                    Dim checklistItems As New List(Of TaskChecklistItemDto)()
+                    Dim sortIdx As Integer = 1
+                    For Each row As DataGridViewRow In dgvChecklist.Rows
+                        If Not row.IsNewRow AndAlso row.Cells("colDesc").Value IsNot Nothing Then
+                            Dim desc = row.Cells("colDesc").Value.ToString().Trim()
+                            If Not String.IsNullOrEmpty(desc) Then
+                                Dim reqProof = False
+                                If row.Cells("colProof").Value IsNot Nothing Then
+                                    Boolean.TryParse(row.Cells("colProof").Value.ToString(), reqProof)
+                                End If
+                                checklistItems.Add(New TaskChecklistItemDto With {
+                                    .ItemDescription = desc,
+                                    .RequiresProof = reqProof,
+                                    .SortOrder = sortIdx
+                                })
+                                sortIdx += 1
+                            End If
+                        End If
+                    Next
+                    
+                    If checklistItems.Count > 0 Then
+                        Await _taskService.SaveTaskChecklistAsync(newTaskId, checklistItems)
+                    End If
+
                     _appLogger.LogInfo($"Successfully created Task ID {newTaskId} for Client '{clientItem.ClientName}'.", "FrmCreateTask")
                     Forms.Common.DataStateTracker.MarkTasksChanged()
                     _createdTaskId = newTaskId

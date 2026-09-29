@@ -23,13 +23,16 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Package ONLY the Release publish output
 ; Strictly exclude source code, test assemblies, db backups, local configs, secrets, debug artifacts
 Source: "..\src\StaffAutomation.WinForms\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir: "{app}"; Excludes: "*.pdb,*.xml,*.vb,*.sln,*.vbproj,dbconnection.json,appsettings.example.json,*.tmp,*Tests.dll"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Bundle SQL Server Express Offline Installer
+Source: "SQLEXPR_x64_ENU.exe"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\SHIFT Workforce"; Filename: "{app}\StaffAutomation.WinForms.exe"
 Name: "{autodesktop}\SHIFT Workforce"; Filename: "{app}\StaffAutomation.WinForms.exe"; Tasks: desktopicon
 
 [Run]
-; Filename: "{app}\StaffAutomation.WinForms.exe"; Description: "{cm:LaunchProgram,SHIFT Workforce}"; Flags: nowait postinstall skipifsilent
+Filename: "{tmp}\SQLEXPR_x64_ENU.exe"; Parameters: "/Q /ACTION=Install /INSTANCENAME=SQLEXPRESS /FEATURES=SQL /IACCEPTSQLSERVERLICENSETERMS /SQLSVCACCOUNT=""NT AUTHORITY\Network Service"" /SQLSYSADMINACCOUNTS=""BUILTIN\ADMINISTRATORS"" /UpdateEnabled=0"; StatusMsg: "Installing SQL Server Express (This may take several minutes)..."; Check: not IsSqlExpressInstalled; Flags: waituntilterminated
+Filename: "{app}\StaffAutomation.WinForms.exe"; Description: "{cm:LaunchProgram,SHIFT Workforce}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function IsDotNet8DesktopInstalled(): Boolean;
@@ -64,6 +67,14 @@ begin
       FindClose(FindRec);
     end;
   end;
+end;
+
+function IsSqlExpressInstalled(): Boolean;
+var
+  SqlVersion: String;
+begin
+  // Check if SQLEXPRESS instance is registered in the registry
+  Result := RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL', 'SQLEXPRESS', SqlVersion);
 end;
 
 function InitializeSetup(): Boolean;

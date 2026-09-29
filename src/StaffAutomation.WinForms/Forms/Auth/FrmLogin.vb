@@ -165,7 +165,7 @@ Namespace Forms.Auth
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
 
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Bootstrap Recovery Required", "🔑 EMERGENCY ADMIN RECOVERY: Account '" & ex.Username & "' is using a legacy password. Set a new secure administrator password to continue.", Forms.Common.AlertType.WarningAlert, actionText:="RECOVER ADMIN")
+                SafeShowAlert("Bootstrap Recovery Required", "🔑 EMERGENCY ADMIN RECOVERY: Account '" & ex.Username & "' is using a legacy password. Set a new secure administrator password to continue.", Forms.Common.AlertType.WarningAlert, "RECOVER ADMIN")
 
                 Using recoveryDlg As New FrmLegacyAdminRecovery(ex.Username)
                     If recoveryDlg.ShowDialog(Me) = DialogResult.OK Then
@@ -177,36 +177,31 @@ Namespace Forms.Auth
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Device Pending Approval", ex.Message, Forms.Common.AlertType.InfoAlert, actionText:="OK")
+                SafeShowAlert("Device Pending Approval", ex.Message, Forms.Common.AlertType.InfoAlert, "OK")
                 txtPassword.Clear()
                 txtPassword.Focus()
             Catch ex As DeviceAccessDeniedException
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Device Access Denied", ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                SafeShowAlert("Device Access Denied", ex.Message, Forms.Common.AlertType.ErrorAlert, "OK")
                 txtPassword.Clear()
                 txtPassword.Focus()
             Catch ex As AuthenticationException
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Authentication Failed", ex.Message, Forms.Common.AlertType.WarningAlert, actionText:="TRY AGAIN")
+                SafeShowAlert("Authentication Failed", ex.Message, Forms.Common.AlertType.WarningAlert, "TRY AGAIN")
                 txtPassword.Clear()
                 txtPassword.Focus()
             Catch ex As Exception
                 Me.Cursor = Cursors.Default
                 btnLogin.Enabled = True
                 btnExit.Enabled = True
-                Try
-                    Dim logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs")
-                    If Not System.IO.Directory.Exists(logDir) Then System.IO.Directory.CreateDirectory(logDir)
-                    Dim crashLogPath = System.IO.Path.Combine(logDir, $"login-crash-{DateTime.UtcNow:yyyy-MM-dd}.log")
-                    System.IO.File.AppendAllText(crashLogPath, ex.ToString() & Environment.NewLine)
-                Catch
-                    ' Ignore logging errors so we don't swallow the original exception
-                End Try
-                Forms.Common.FrmInAppAlert.ShowModal(Me, "Login Failure", "A system error occurred during login." & Environment.NewLine & Environment.NewLine & "Error: " & ex.Message, Forms.Common.AlertType.ErrorAlert, actionText:="OK")
+                
+                WriteLoginCrashLog(ex)
+                
+                SafeShowAlert("Login Failure", "A system error occurred during login." & Environment.NewLine & Environment.NewLine & "Error: " & ex.Message, Forms.Common.AlertType.ErrorAlert, "OK")
                 txtPassword.Clear()
             End Try
         End Sub
@@ -221,6 +216,33 @@ Namespace Forms.Auth
             Else
                 txtPassword.PasswordChar = ChrW(8226)
             End If
+        End Sub
+
+        Private Sub SafeShowAlert(title As String, message As String, alertType As Forms.Common.AlertType, actionText As String)
+            Try
+                Forms.Common.FrmInAppAlert.ShowModal(Me, title, message, alertType, actionText:=actionText)
+            Catch ex As Exception
+                WriteLoginCrashLog(ex)
+                MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        End Sub
+
+        Private Sub WriteLoginCrashLog(ex As Exception)
+            Try
+                Dim logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs")
+                If Not System.IO.Directory.Exists(logDir) Then System.IO.Directory.CreateDirectory(logDir)
+                Dim crashLogPath = System.IO.Path.Combine(logDir, $"login-crash-{DateTime.UtcNow:yyyy-MM-dd}.log")
+                System.IO.File.AppendAllText(crashLogPath, ex.ToString() & Environment.NewLine)
+            Catch backupEx As Exception
+                Try
+                    Dim localAppDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SHIFTWorkforce", "logs")
+                    If Not System.IO.Directory.Exists(localAppDir) Then System.IO.Directory.CreateDirectory(localAppDir)
+                    Dim crashLogPath = System.IO.Path.Combine(localAppDir, $"login-crash-{DateTime.UtcNow:yyyy-MM-dd}.log")
+                    System.IO.File.AppendAllText(crashLogPath, ex.ToString() & Environment.NewLine)
+                Catch
+                    ' Last resort fallback fails, do nothing
+                End Try
+            End Try
         End Sub
 
         ''' <summary>

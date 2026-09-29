@@ -1,0 +1,1 @@
+﻿-- Schema history logic is natively managed by MigrationRunner.vb

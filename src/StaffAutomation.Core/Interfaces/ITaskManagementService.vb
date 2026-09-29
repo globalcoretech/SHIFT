@@ -36,5 +36,12 @@ Namespace Interfaces
         Function CanCompleteTask(task As TaskDto, currentUserId As Integer, userRole As UserRole) As Boolean
         Function CanCompleteTask(state As TaskWorkflowState, assignedToUserId As Integer, currentUserId As Integer, userRole As UserRole) As Boolean
         Function CanChangeTaskType(state As TaskWorkflowState, currentCategoryId As Integer, newCategoryId As Integer) As Boolean
+
+        ' Checklist Methods
+        Function GetTaskChecklistAsync(taskId As Integer) As Task(Of List(Of TaskChecklistItemDto))
+        Function SaveTaskChecklistAsync(taskId As Integer, items As List(Of TaskChecklistItemDto)) As Task
+        Function CompleteChecklistItemAsync(checklistId As Integer, currentUserId As Integer, remarks As String, attachmentPath As String) As Task(Of Boolean)
+        Function UploadProofAsync(checklistId As Integer, currentUserId As Integer, remarks As String, attachmentPath As String) As Task(Of Boolean)
+        Function InvalidateChecklistItemAsync(checklistId As Integer, currentUserId As Integer, remarks As String) As Task(Of Boolean)
     End Interface
 End Namespace

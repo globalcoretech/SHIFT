@@ -16,6 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Migrations\*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\StaffAutomation.Core\StaffAutomation.Core.vbproj" />
   </ItemGroup>
 

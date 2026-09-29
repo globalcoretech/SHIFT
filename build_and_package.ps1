@@ -21,6 +21,14 @@ Write-Host "[4/5] Creating fresh Release publish output..." -ForegroundColor Cya
 dotnet publish src\StaffAutomation.WinForms\StaffAutomation.WinForms.vbproj -c Release -f net8.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=false
 if ($LASTEXITCODE -ne 0) { throw "Publish failed" }
 
+Write-Host "[4.5/5] Checking for SQL Server 2019 Express installer..." -ForegroundColor Cyan
+$sqlInstallerPath = "installer\SQLEXPR_x64_ENU.exe"
+if (-not (Test-Path $sqlInstallerPath)) {
+    Write-Host "Downloading SQL Server Express (~260MB). This may take a while..." -ForegroundColor Yellow
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri "https://download.microsoft.com/download/7/c/1/7c14e92e-bdcb-4f89-b7cf-93543e7112d1/SQLEXPR_x64_ENU.exe" -OutFile $sqlInstallerPath
+}
+
 Write-Host "[5/5] Building Inno Setup installer..." -ForegroundColor Cyan
 $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $isccPath)) {

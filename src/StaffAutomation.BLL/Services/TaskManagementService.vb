@@ -31,8 +31,9 @@ Namespace Services
         Private ReadOnly _userRepo As IUserRepository
         Private ReadOnly _activityRepo As ITaskActivityRepository
         Private ReadOnly _connectionFactory As IDatabaseConnectionFactory
+        Private ReadOnly _checklistRepo As ITaskChecklistRepository
 
-        Public Sub New(taskRepo As ITaskRepository, workflowEngine As ITaskWorkflowEngine, appLogger As IAppLogger, auditLogger As AuditLogger, Optional clientRepo As IClientRepository = Nothing, Optional userRepo As IUserRepository = Nothing, Optional activityRepo As ITaskActivityRepository = Nothing, Optional connectionFactory As IDatabaseConnectionFactory = Nothing)
+        Public Sub New(taskRepo As ITaskRepository, workflowEngine As ITaskWorkflowEngine, appLogger As IAppLogger, auditLogger As AuditLogger, Optional clientRepo As IClientRepository = Nothing, Optional userRepo As IUserRepository = Nothing, Optional activityRepo As ITaskActivityRepository = Nothing, Optional connectionFactory As IDatabaseConnectionFactory = Nothing, Optional checklistRepo As ITaskChecklistRepository = Nothing)
             _taskRepo = taskRepo
             _workflowEngine = workflowEngine
             _appLogger = appLogger
@@ -41,6 +42,7 @@ Namespace Services
             _userRepo = userRepo
             _activityRepo = activityRepo
             _connectionFactory = connectionFactory
+            _checklistRepo = checklistRepo
         End Sub
 
         Public Async Function GetTaskByIdAsync(taskId As Integer) As Task(Of TaskDto) Implements ITaskManagementService.GetTaskByIdAsync
@@ -723,6 +725,143 @@ Namespace Services
                 .IsOverdue = daysDiff < 0,
                 .IsDeleted = entity.IsDeleted
             }
+        End Function
+
+        ' -------------------------------------------------------------------------------------
+        ' CHECKLIST METHODS
+        ' -------------------------------------------------------------------------------------
+        Public Async Function GetTaskChecklistAsync(taskId As Integer) As Task(Of List(Of TaskChecklistItemDto)) Implements ITaskManagementService.GetTaskChecklistAsync
+            If _checklistRepo Is Nothing Then Return New List(Of TaskChecklistItemDto)()
+            
+            Dim entities = Await _checklistRepo.GetChecklistForTaskAsync(taskId)
+            Dim dtos As New List(Of TaskChecklistItemDto)()
+            
+            For Each entity In entities
+                Dim dto As New TaskChecklistItemDto With {
+                    .ChecklistId = entity.ChecklistId,
+                    .TaskId = entity.TaskId,
+                    .ItemDescription = entity.ItemDescription,
+                    .RequiresProof = entity.RequiresProof,
+                    .IsCompleted = entity.IsCompleted,
+                    .CompletedByUserId = entity.CompletedByUserId,
+                    .CompletedOn = entity.CompletedOn,
+                    .Remarks = entity.Remarks,
+                    .AttachmentPath = entity.AttachmentPath,
+                    .SortOrder = entity.SortOrder,
+                    .CreatedOn = entity.CreatedOn
+                }
+                
+                If dto.CompletedByUserId.HasValue AndAlso _userRepo IsNot Nothing Then
+                    Try
+                        Dim user = Await _userRepo.GetByIdAsync(dto.CompletedByUserId.Value)
+                        If user IsNot Nothing Then dto.CompletedByName = user.FullName
+                    Catch
+                    End Try
+                End If
+                
+                dtos.Add(dto)
+            Next
+            
+            Return dtos
+        End Function
+
+        Public Async Function SaveTaskChecklistAsync(taskId As Integer, items As List(Of TaskChecklistItemDto)) As Task Implements ITaskManagementService.SaveTaskChecklistAsync
+            If _checklistRepo Is Nothing Then Return
+            
+            Await _checklistRepo.DeleteChecklistItemsForTaskAsync(taskId)
+            
+            Dim entities As New List(Of TaskChecklistItemEntity)()
+            For Each item In items
+                entities.Add(New TaskChecklistItemEntity With {
+                    .TaskId = taskId,
+                    .ItemDescription = item.ItemDescription,
+                    .RequiresProof = item.RequiresProof,
+                    .IsCompleted = item.IsCompleted,
+                    .SortOrder = item.SortOrder
+                })
+            Next
+            
+            Await _checklistRepo.AddChecklistItemsAsync(entities)
+            
+            Dim currentUserId = If(CurrentUserContext.IsAuthenticated, CurrentUserContext.CurrentUser.UserId, 0)
+            Await _auditLogger.LogAuditAsync(currentUserId, "UPDATE", "Task Checklists", $"Updated checklist for task {taskId}.")
+        End Function
+
+        Public Async Function CompleteChecklistItemAsync(checklistId As Integer, currentUserId As Integer, remarks As String, attachmentPath As String) As Task(Of Boolean) Implements ITaskManagementService.CompleteChecklistItemAsync
+            If _checklistRepo Is Nothing Then Return False
+            
+            Dim entity = Await _checklistRepo.GetChecklistItemByIdAsync(checklistId)
+            If entity Is Nothing Then Return False
+            
+            entity.IsCompleted = True
+            entity.CompletedByUserId = currentUserId
+            entity.CompletedOn = DateTime.UtcNow
+            entity.Remarks = remarks
+            
+            ' If it's empty in this call but we already have an attachment, keep the existing one (for admin approval)
+            If Not String.IsNullOrWhiteSpace(attachmentPath) Then
+                entity.AttachmentPath = attachmentPath
+            End If
+            
+            Await _checklistRepo.UpdateChecklistItemAsync(entity)
+            
+            ' Log to security audit
+            Await _auditLogger.LogAuditAsync(currentUserId, "COMPLETE_ITEM", "Task Checklists", $"Completed checklist item: {entity.ItemDescription} for task {entity.TaskId}. Remark: {remarks}")
+            
+            Return True
+        End Function
+        
+        Public Async Function UploadProofAsync(checklistId As Integer, currentUserId As Integer, remarks As String, attachmentPath As String) As Task(Of Boolean) Implements ITaskManagementService.UploadProofAsync
+            If _checklistRepo Is Nothing Then Return False
+            
+            Dim entity = Await _checklistRepo.GetChecklistItemByIdAsync(checklistId)
+            If entity Is Nothing Then Return False
+            
+            entity.AttachmentPath = attachmentPath
+            entity.Remarks = remarks
+            ' Do NOT set IsCompleted to true here, it remains false pending admin verification
+            
+            Await _checklistRepo.UpdateChecklistItemAsync(entity)
+            
+            Await _auditLogger.LogAuditAsync(currentUserId, "UPLOAD_PROOF", "Task Checklists", $"Uploaded proof for checklist item: {entity.ItemDescription} for task {entity.TaskId}.")
+            
+            Return True
+        End Function
+
+        Public Async Function InvalidateChecklistItemAsync(checklistId As Integer, currentUserId As Integer, remarks As String) As Task(Of Boolean) Implements ITaskManagementService.InvalidateChecklistItemAsync
+            If _checklistRepo Is Nothing Then Return False
+            
+            Dim entity = Await _checklistRepo.GetChecklistItemByIdAsync(checklistId)
+            If entity Is Nothing Then Return False
+            
+            entity.IsCompleted = False
+            entity.CompletedByUserId = Nothing
+            entity.CompletedOn = Nothing
+            entity.Remarks = remarks
+            entity.AttachmentPath = Nothing
+            
+            Await _checklistRepo.UpdateChecklistItemAsync(entity)
+            
+            ' Log to security audit
+            Await _auditLogger.LogAuditAsync(currentUserId, "INVALIDATE_ITEM", "Task Checklists", $"Invalidated checklist item: {entity.ItemDescription} for task {entity.TaskId}. Remark: {remarks}")
+            
+            ' Log to task timeline
+            If _activityRepo IsNot Nothing Then
+                Dim activity As New TaskActivityEntity With {
+                    .TaskId = entity.TaskId,
+                    .UserId = currentUserId,
+                    .Category = TimeCategory.WorkTime,
+                    .ActivityDescription = $"Checklist item marked invalid: {entity.ItemDescription}. Remark: {remarks}",
+                    .StartTime = DateTime.UtcNow,
+                    .EndTime = DateTime.UtcNow,
+                    .DurationMinutes = 0,
+                    .ActivityDate = DateTime.UtcNow,
+                    .CreatedBy = currentUserId
+                }
+                Await _activityRepo.AddAsync(activity)
+            End If
+            
+            Return True
         End Function
     End Class
 End Namespace

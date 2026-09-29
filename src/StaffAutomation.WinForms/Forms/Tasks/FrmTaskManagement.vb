@@ -36,8 +36,9 @@ Namespace Forms.Tasks
             Dim clientRepo As DAL.Interfaces.IClientRepository = New ClientRepository(sqlHelper)
             _userRepo = New UserRepository(sqlHelper)
             Dim workflowEngine As ITaskWorkflowEngine = New TaskWorkflowEngine()
+            Dim checklistRepo As DAL.Interfaces.ITaskChecklistRepository = New TaskChecklistRepository(sqlHelper)
 
-            _taskService = New TaskManagementService(taskRepo, workflowEngine, appLogger, auditLogger, clientRepo, _userRepo)
+            _taskService = New TaskManagementService(taskRepo, workflowEngine, appLogger, auditLogger, clientRepo, _userRepo, Nothing, Nothing, checklistRepo)
             _clientService = New ClientService(clientRepo, appLogger, auditLogger)
         End Sub
 

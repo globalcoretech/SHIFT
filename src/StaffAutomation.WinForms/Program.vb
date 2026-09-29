@@ -54,6 +54,15 @@ Namespace StaffAutomation.WinForms
                 Try
                     Dim config As Core.Configuration.IAppConfiguration = New DAL.Configuration.AppConfiguration()
                     config.ValidateConfiguration()
+                    
+                    ' Run Database Migrations
+                    Try
+                        Dim runner As New DAL.Migrations.MigrationRunner(config.GetConnectionString())
+                        runner.RunMigrations()
+                    Catch ex As Exception
+                        Throw New Core.Exceptions.DataAccessException("Database migration failed during startup.", ex)
+                    End Try
+
                     isConfigured = True
                 Catch ex As Core.Exceptions.ConfigurationException
                     If ex.SettingKey = "ERR_CFG_MALFORMED" Then

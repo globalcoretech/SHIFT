@@ -260,7 +260,8 @@ Namespace Forms.Tasks
             _discussionService = New DiscussionService(discussionRepo, taskRepo, _appLogger, _auditLogger)
             _attendanceService = New AttendanceService(attendanceRepo, _userRepo, _appLogger, _auditLogger, Nothing)
             _taskCategoryService = New TaskCategoryService(taskCategoryRepo, _auditLogger)
-            _taskService = New TaskManagementService(taskRepo, workflowEngine, _appLogger, _auditLogger, clientRepo, _userRepo, _activityRepo, connFactory)
+            Dim checklistRepo As DAL.Interfaces.ITaskChecklistRepository = New TaskChecklistRepository(sqlHelper)
+            _taskService = New TaskManagementService(taskRepo, workflowEngine, _appLogger, _auditLogger, clientRepo, _userRepo, _activityRepo, connFactory, checklistRepo)
             Me.DoubleBuffered = True
             Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.OptimizedDoubleBuffer Or ControlStyles.ResizeRedraw, True)
             Me.UpdateStyles()
@@ -2524,7 +2525,23 @@ Namespace Forms.Tasks
                     End If
                 End If
 
-                ' 3. Confirmation Modal Guard
+                ' 3. Custom Checklist Guard
+                Try
+                    Dim customChecklist = Await _taskService.GetTaskChecklistAsync(_selectedTask.TaskId)
+                    If customChecklist IsNot Nothing AndAlso customChecklist.Count > 0 Then
+                        Dim incompleteProofItems = customChecklist.Where(Function(c) c.RequiresProof AndAlso Not c.IsCompleted).ToList()
+                        If incompleteProofItems.Count > 0 Then
+                            Dim stepListText As String = String.Join(Environment.NewLine, incompleteProofItems.Select(Function(s) "  • " & s.ItemDescription))
+                            Dim alertMsg = $"Cannot complete task.{Environment.NewLine}{Environment.NewLine}The following checklist items require proof and are incomplete:{Environment.NewLine}{stepListText}{Environment.NewLine}{Environment.NewLine}Please complete these items from the Task Workflow Viewer before submitting."
+                            Forms.Common.FrmInAppAlert.ShowModal(Me.FindForm(), "INCOMPLETE CHECKLIST", alertMsg, Forms.Common.AlertType.WarningAlert, actionText:="UNDERSTOOD")
+                            Return
+                        End If
+                    End If
+                Catch exChecklist As Exception
+                    _appLogger.LogError($"[CustomChecklistGuard] Failed to fetch checklist for task {_selectedTask.TaskId}: {exChecklist.Message}", "DailyTasksControl", exChecklist)
+                End Try
+
+                ' 4. Confirmation Modal Guard
                 Dim actionVerb = If(isEmployee, "Submit", "Complete")
                 Dim confirmMsg = If(isEmployee,
                     $"Submit {_selectedTask.Title} for review?{Environment.NewLine}{Environment.NewLine}Confirm that you have finished your work.",
