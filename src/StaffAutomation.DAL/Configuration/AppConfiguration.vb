@@ -28,7 +28,7 @@ Namespace Configuration
                 Return envConn.Trim()
             End If
 
-            ' Precedence 2: Local per-machine dbconnection.json (%APPDATA%\SHIFTWorkforce\dbconnection.json or local fallback)
+            ' Precedence 2: Local per-machine dbconnection.json (%PROGRAMDATA%\SHIFTWorkforce\dbconnection.json or local fallback)
             Dim jsonConnStr = GetLocalMachineJsonConnectionString()
             If Not String.IsNullOrWhiteSpace(jsonConnStr) Then
                 Return jsonConnStr
@@ -46,7 +46,7 @@ Namespace Configuration
         End Function
 
         ''' <summary>
-        ''' Reads local per-machine dbconnection.json configuration from %APPDATA%\SHIFTWorkforce or application root.
+        ''' Reads local per-machine dbconnection.json configuration from %PROGRAMDATA%\SHIFTWorkforce or application root.
         ''' </summary>
         Private Function GetLocalMachineJsonConnectionString() As String
             ' Check Primary Machine Path: %APPDATA%\SHIFTWorkforce\dbconnection.json

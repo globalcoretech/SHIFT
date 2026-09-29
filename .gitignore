@@ -46,3 +46,4 @@ specs/
 
 # Exclude entire database folder
 database/
+installer/SQLEXPR_x64_ENU.exe

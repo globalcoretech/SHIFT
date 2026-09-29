@@ -11,8 +11,6 @@
 -- Standards      : 100% Idempotent, Non-destructive, Parameterized/Safe Seeding
 -- ===============================================================================
 
-USE [StaffAutomationDb];
-GO
 
 -- -------------------------------------------------------------------------------
 -- 1. Extend dbo.tbl_FinancialYears (Safely add columns if missing)

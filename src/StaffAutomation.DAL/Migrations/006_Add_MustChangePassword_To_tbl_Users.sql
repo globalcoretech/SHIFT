@@ -5,8 +5,6 @@
 -- Date: 2026-08-22
 -- ============================================================================
 
-USE [StaffAutomationDb];
-GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.tbl_Users') AND name = 'MustChangePassword')
 BEGIN

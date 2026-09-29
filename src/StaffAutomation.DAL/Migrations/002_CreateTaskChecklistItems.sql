@@ -1,5 +1,3 @@
-USE [StaffAutomationDb]
-GO
 
 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[tbl_TaskChecklistItems]') AND type in (N'U'))
 BEGIN

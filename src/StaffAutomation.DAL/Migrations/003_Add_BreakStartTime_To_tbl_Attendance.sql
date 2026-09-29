@@ -5,8 +5,6 @@
 -- Description    : Idempotent migration script adding BreakStartTime column to dbo.tbl_Attendance
 -- ===============================================================================
 
-USE [StaffAutomationDb];
-GO
 
 IF EXISTS (SELECT 1 FROM sys.tables WHERE name = N'tbl_Attendance')
 BEGIN

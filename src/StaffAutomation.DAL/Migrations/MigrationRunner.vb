@@ -73,19 +73,34 @@ Namespace Migrations
                 cmd.Parameters.AddWithValue("@LockOwner", "Session")
                 cmd.Parameters.AddWithValue("@LockTimeout", 15000) ' 15 seconds
 
-                Dim result = Convert.ToInt32(cmd.ExecuteScalar())
+                Dim returnParameter = cmd.Parameters.Add("@ReturnValue", SqlDbType.Int)
+                returnParameter.Direction = ParameterDirection.ReturnValue
+
+                cmd.ExecuteNonQuery()
+
+                Dim result = Convert.ToInt32(returnParameter.Value)
                 Return result >= 0
             End Using
         End Function
 
         Private Sub ReleaseLock(connection As SqlConnection)
-            Using cmd = connection.CreateCommand()
-                cmd.CommandText = "sp_releaseapplock"
-                cmd.CommandType = CommandType.StoredProcedure
-                cmd.Parameters.AddWithValue("@Resource", "StaffAutomation_Migration_Lock")
-                cmd.Parameters.AddWithValue("@LockOwner", "Session")
-                cmd.ExecuteNonQuery()
-            End Using
+            Try
+                Using cmd = connection.CreateCommand()
+                    cmd.CommandText = "sp_releaseapplock"
+                    cmd.CommandType = CommandType.StoredProcedure
+                    cmd.Parameters.AddWithValue("@Resource", "StaffAutomation_Migration_Lock")
+                    cmd.Parameters.AddWithValue("@LockOwner", "Session")
+                    cmd.ExecuteNonQuery()
+                End Using
+            Catch ex As Exception
+                Try
+                    Dim logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs")
+                    If Not System.IO.Directory.Exists(logDir) Then System.IO.Directory.CreateDirectory(logDir)
+                    Dim logPath = System.IO.Path.Combine(logDir, $"migration-{DateTime.UtcNow:yyyy-MM-dd}.log")
+                    System.IO.File.AppendAllText(logPath, $"[{DateTime.UtcNow:HH:mm:ss}] Warning: Failed to release migration lock: {ex.Message}" & Environment.NewLine)
+                Catch
+                End Try
+            End Try
         End Sub
 
         Private Sub EnsureSchemaHistoryExists(connection As SqlConnection)
@@ -105,28 +120,13 @@ Namespace Migrations
                 ' Check if existing database needs baseline
                 cmd.CommandText = "SELECT COUNT(*) FROM tbl_SchemaHistory"
                 If Convert.ToInt32(cmd.ExecuteScalar()) = 0 Then
-                    cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[tbl_Users]') AND type in (N'U')"
+                    ' Check if any application tables exist
+                    cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE (object_id = OBJECT_ID(N'[dbo].[tbl_Users]') OR object_id = OBJECT_ID(N'[dbo].[tbl_Clients]') OR object_id = OBJECT_ID(N'[dbo].[tbl_Tasks]')) AND type in (N'U')"
                     If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then
-                        ' Database exists, check if Phase15 schema is present
-                        cmd.CommandText = "SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.tbl_Clients') AND name = 'DepartmentId' AND is_nullable = 1"
-                        If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then
-                            ' We are at version 15
-                            cmd.CommandText = "INSERT INTO tbl_SchemaHistory (MigrationNumber, MigrationName, AppliedOn, Status) VALUES (15, 'Baseline', GETUTCDATE(), 'Baseline')"
-                            cmd.ExecuteNonQuery()
-                        Else
-                            ' Check version 14/12
-                            cmd.CommandText = "SELECT COUNT(*) FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[tbl_UserDevices]') AND type in (N'U')"
-                            If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then
-                                cmd.CommandText = "INSERT INTO tbl_SchemaHistory (MigrationNumber, MigrationName, AppliedOn, Status) VALUES (14, 'Baseline', GETUTCDATE(), 'Baseline')"
-                                cmd.ExecuteNonQuery()
-                            Else
-                                ' If tbl_Users exists but it's an old DB, maybe we just set baseline to 10
-                                ' But to be safe, if we don't know, we set to 15.
-                                cmd.CommandText = "INSERT INTO tbl_SchemaHistory (MigrationNumber, MigrationName, AppliedOn, Status) VALUES (15, 'Baseline_Unknown', GETUTCDATE(), 'Baseline')"
-                                cmd.ExecuteNonQuery()
-                            End If
-                        End If
+                        ' Ambiguous/legacy state
+                        Throw New DataAccessException("Database has existing tables but no migration history. Manual review required before automatic migrations can proceed.")
                     End If
+                    ' If 0, it's a fresh database, do nothing, let migrations start from 001
                 End If
             End Using
         End Sub

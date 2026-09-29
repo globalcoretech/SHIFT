@@ -22,7 +22,7 @@ Namespace Configuration
             If String.IsNullOrEmpty(plainPassword) Then Return ""
             Try
                 Dim bytes = Encoding.UTF8.GetBytes(plainPassword)
-                Dim encryptedBytes = ProtectedData.Protect(bytes, Nothing, DataProtectionScope.CurrentUser)
+                Dim encryptedBytes = ProtectedData.Protect(bytes, Nothing, DataProtectionScope.LocalMachine)
                 Return Convert.ToBase64String(encryptedBytes)
             Catch ex As Exception
                 ' Fallback or re-throw configuration exception if DPAPI is unavailable
@@ -39,7 +39,7 @@ Namespace Configuration
             If String.IsNullOrEmpty(encryptedPassword) Then Return ""
             Try
                 Dim encryptedBytes = Convert.FromBase64String(encryptedPassword)
-                Dim bytes = ProtectedData.Unprotect(encryptedBytes, Nothing, DataProtectionScope.CurrentUser)
+                Dim bytes = ProtectedData.Unprotect(encryptedBytes, Nothing, DataProtectionScope.LocalMachine)
                 Return Encoding.UTF8.GetString(bytes)
             Catch ex As Exception
                 ' Suppress sensitive exception details to avoid leaking credential context

@@ -76,6 +76,27 @@ Namespace StaffAutomation.WinForms
                             Return
                         End If
                     End Using
+                Catch ex As Core.Exceptions.DataAccessException
+                    ' Safely log the exception
+                    Try
+                        Dim config2 As Core.Configuration.IAppConfiguration = New DAL.Configuration.AppConfiguration()
+                        Dim logger As Core.Logging.IAppLogger = New BLL.Logging.AppLogger(config2)
+                        logger.LogFatal(ex.ToString(), "MigrationStartup", ex)
+                    Catch logEx As Exception
+                        Try
+                            Dim logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs")
+                            If Not System.IO.Directory.Exists(logDir) Then System.IO.Directory.CreateDirectory(logDir)
+                            Dim fatalLogPath = System.IO.Path.Combine(logDir, $"fatal-{DateTime.UtcNow:yyyy-MM-dd}.log")
+                            System.IO.File.AppendAllText(fatalLogPath, ex.ToString() & Environment.NewLine)
+                        Catch
+                        End Try
+                    End Try
+
+                    ' Show dialog to user
+                    Dim result = MessageBox.Show("Database setup failed. Please verify the database server is reachable and try again.", "Database Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error)
+                    If result = DialogResult.Cancel Then
+                        Return
+                    End If
                 End Try
             End While
 

@@ -105,10 +105,10 @@ Namespace Configuration
         End Function
 
         ''' <summary>
-        ''' Gets standard per-machine configuration file path: %APPDATA%\SHIFTWorkforce\dbconnection.json
+        ''' Gets standard per-machine configuration file path: %PROGRAMDATA%\SHIFTWorkforce\dbconnection.json
         ''' </summary>
         Public Shared Function GetDefaultMachineConfigPath() As String
-            Dim appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+            Dim appData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
             Return Path.Combine(appData, "SHIFTWorkforce", "dbconnection.json")
         End Function
 
